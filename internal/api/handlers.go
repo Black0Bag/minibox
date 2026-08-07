@@ -64,21 +64,33 @@ func writeError(w http.ResponseWriter, status int, code, title, detail string) {
 	})
 }
 
-// handleStatus 系统状态（含健康检查信息）
+// handleStatus 系统状态（含健康检查信息 + 首次启动向导提示）
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
+	// 首次启动检测（M8：向导）：无启用的 LLM 供应商 → 提示向导
+	providerReady := len(s.cfg.Providers) > 0
 	writeJSON(w, http.StatusOK, map[string]any{
-		"状态":     "运行中",
-		"版本":     s.version,
-		"运行时长秒":  int(time.Since(s.startTime).Seconds()),
-		"监听端口":   s.cfg.Server.Port,
-		"数据目录":   s.cfg.DataDir,
-		"日志级别":   logging.CurrentLevel(),
-		"Go版本":   runtime.Version(),
-		"内存占用MB": mem.Alloc / 1024 / 1024,
-		"供应商数":   len(s.cfg.Providers),
+		"状态":       "运行中",
+		"版本":       s.version,
+		"运行时长秒":    int(time.Since(s.startTime).Seconds()),
+		"监听端口":     s.cfg.Server.Port,
+		"数据目录":     s.cfg.DataDir,
+		"日志级别":     logging.CurrentLevel(),
+		"Go版本":     runtime.Version(),
+		"内存占用MB":   mem.Alloc / 1024 / 1024,
+		"供应商数":     len(s.cfg.Providers),
+		"LLM就绪":    providerReady,
+		"首次启动提示":   firstRunHint(providerReady),
 	})
+}
+
+// firstRunHint 首次启动向导提示（M8）
+func firstRunHint(providerReady bool) string {
+	if !providerReady {
+		return "尚未配置 LLM 供应商，请运行 `minibox 配置` 或调用 POST /api/v1/供应商/ 完成向导配置"
+	}
+	return "配置就绪"
 }
 
 // handleVersion 版本信息（N-14：版本号单一来源）

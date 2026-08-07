@@ -166,6 +166,8 @@ func (s *Server) Router() http.Handler {
 		r.Route("/api/v1", func(r chi.Router) {
 			r.Get("/状态", s.handleStatus)
 			r.Get("/版本", s.handleVersion)
+			r.Get("/文档", s.handleAPIDoc)
+			r.Get("/文档.md", s.handleAPIDocMarkdown)
 			r.Get("/logs", s.handleLogs)
 			r.Route("/供应商", func(r chi.Router) {
 				r.Get("/", s.handleListProviders)
