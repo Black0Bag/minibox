@@ -14,6 +14,7 @@ import (
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/distill"
 	"github.com/Black0Bag/minibox/internal/embed"
+	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/memory"
 )
 
@@ -27,6 +28,7 @@ type Server struct {
 	embedClient *embed.Client
 	compiler    *compile.Compiler
 	distiller   *distill.Distiller
+	chatLLM     *llm.Client
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
@@ -37,6 +39,12 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 	}
 	if store != nil {
 		s.distiller = distill.NewDistiller(store)
+	}
+	for _, p := range cfg.Providers {
+		if p.Enabled {
+			s.chatLLM = llm.New(p.BaseURL, p.APIKey, p.Model)
+			break
+		}
 	}
 	return s
 }
@@ -91,6 +99,7 @@ func (s *Server) Router() http.Handler {
 				r.Get("/", s.handleCompileList)
 				r.Get("/{id}", s.handleCompileGet)
 			})
+			r.Post("/对话/流式", s.handleChatStream)
 			r.Route("/知识库", func(r chi.Router) {
 				r.Post("/", s.handleKBCreate)
 				r.Get("/", s.handleKBList)

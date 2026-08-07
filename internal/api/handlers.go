@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/logging"
 	"github.com/Black0Bag/minibox/internal/memory"
 )
@@ -682,4 +683,85 @@ func (s *Server) handleSnapshotRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.Info("从快照恢复", "file", req.File)
 	writeJSON(w, http.StatusOK, map[string]any{"状态": "已恢复", "快照": req.File})
+}
+
+// ============ 对话 API（M3：SSE 流式 + Normalizer）============
+
+// writeSSE 写入 SSE 事件并刷新
+func writeSSE(w http.ResponseWriter, flusher http.Flusher, event, data string) {
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	flusher.Flush()
+}
+
+// handleChatStream 流式对话（SSE：thinking_start/delta/end + answer_start/delta/done）
+func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	if s.chatLLM == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "LLM 未配置", "请先在配置中添加启用的供应商")
+		return
+	}
+	var req struct {
+		Messages []llm.Message `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", "JSON 解析失败")
+		return
+	}
+	if len(req.Messages) == 0 {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "messages 不能为空")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", "不支持流式")
+		return
+	}
+
+	ch, err := s.chatLLM.ChatStream(r.Context(), req.Messages, llm.Options{MaxTokens: 4000, Temperature: 0.7})
+	if err != nil {
+		writeSSE(w, flusher, "error", `{"code":"LLM_GATEWAY_ERROR","detail":"`+redact(err.Error())+`"}`)
+		return
+	}
+
+	thinking := false
+	answering := false
+	for chunk := range ch {
+		if chunk.Done {
+			break
+		}
+		switch chunk.Type {
+		case "thinking":
+			if !thinking {
+				writeSSE(w, flusher, "thinking_start", "{}")
+				thinking = true
+			}
+			writeSSE(w, flusher, "thinking_delta", `{"delta":`+jsonStr(chunk.Text)+`}`)
+		case "answer":
+			if thinking {
+				writeSSE(w, flusher, "thinking_end", "{}")
+				thinking = false
+			}
+			if !answering {
+				writeSSE(w, flusher, "answer_start", "{}")
+				answering = true
+			}
+			writeSSE(w, flusher, "answer_delta", `{"delta":`+jsonStr(chunk.Text)+`}`)
+		}
+	}
+	if thinking {
+		writeSSE(w, flusher, "thinking_end", "{}")
+	}
+	if answering {
+		writeSSE(w, flusher, "answer_done", "{}")
+	}
+	writeSSE(w, flusher, "done", "{}")
+}
+
+// jsonStr 将字符串转 JSON 安全字符串
+func jsonStr(s string) string {
+	b, _ := json.Marshal(redact(s))
+	return string(b)
 }
