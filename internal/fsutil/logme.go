@@ -117,9 +117,12 @@ func (l *LogMe) Ensure() error {
 	if err != nil {
 		return fmt.Errorf("创建 logme %s: %w", l.file, err)
 	}
-	defer f.Close()
 	if _, err := f.WriteString(semanticTemplate); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("写入 logme 模板: %w", err)
+	}
+	if cerr := f.Close(); cerr != nil {
+		return fmt.Errorf("关闭 logme: %w", cerr)
 	}
 	slog.Debug("logme 已创建", "dir", l.dir)
 	return nil
@@ -144,9 +147,12 @@ func (l *LogMe) Append(actor, action string) error {
 	if err != nil {
 		return fmt.Errorf("打开 logme 追加: %w", err)
 	}
-	defer f.Close()
 	if _, err := f.WriteString(line); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("追加 logme: %w", err)
+	}
+	if cerr := f.Close(); cerr != nil {
+		return fmt.Errorf("关闭 logme: %w", cerr)
 	}
 	return nil
 }

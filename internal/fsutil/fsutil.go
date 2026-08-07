@@ -83,7 +83,7 @@ func (f *FS) WriteNew(path string, data []byte) error {
 		return fmt.Errorf("新建文件 %s: %w", path, err)
 	}
 	if _, werr := file.Write(data); werr != nil {
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("写入文件 %s: %w", path, werr)
 	}
 	if cerr := file.Close(); cerr != nil {
@@ -104,9 +104,12 @@ func (f *FS) Append(path string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("打开追加 %s: %w", path, err)
 	}
-	defer file.Close()
 	if _, werr := file.Write(data); werr != nil {
+		_ = file.Close()
 		return fmt.Errorf("追加写入 %s: %w", path, werr)
+	}
+	if cerr := file.Close(); cerr != nil {
+		return fmt.Errorf("关闭文件 %s: %w", path, cerr)
 	}
 	if f.lm != nil {
 		_ = f.lm.Append("agent:minibox", fmt.Sprintf("追加文件 %s (+%d B)", rel(path), len(data)))

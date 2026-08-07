@@ -26,19 +26,19 @@ type Provider struct {
 
 // Config 顶层配置
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Logging   logging.Config  `yaml:"logging"`
-	Providers []Provider      `yaml:"providers"`
-	DataDir   string          `yaml:"data_dir"` // 数据目录（数据库/日志）
+	Server    ServerConfig   `yaml:"server"`
+	Logging   logging.Config `yaml:"logging"`
+	Providers []Provider     `yaml:"providers"`
+	DataDir   string         `yaml:"data_dir"` // 数据目录（数据库/日志）
 }
 
 // Default 返回默认配置
 func Default() Config {
 	return Config{
-		Server: ServerConfig{Host: "0.0.0.0", Port: 8086},
-		Logging: logging.Default(),
+		Server:    ServerConfig{Host: "0.0.0.0", Port: 8086},
+		Logging:   logging.Default(),
 		Providers: []Provider{},
-		DataDir: "data",
+		DataDir:   "data",
 	}
 }
 

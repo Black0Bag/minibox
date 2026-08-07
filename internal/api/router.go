@@ -31,24 +31,23 @@ func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5, "application/json"))
 
 	// CORS 预留（N-03）：当前 APP 不受限，为 PC Web 版 / API 文档在线查看预留
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type", "Authorization"},
-		MaxAge:           300,
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Content-Type", "Authorization"},
+		MaxAge:         300,
 	}))
 
 	// 健康检查豁免限流（watchdog 依赖，N-04）
 	r.Get("/api/v1/healthz", s.handleHealthz)
 
-	// 其余 API 走限流（N-04：60/min burst 10，按 IP）
+	// 其余 API 走限流（N-04：60/min，按 IP 键控）
 	r.Group(func(r chi.Router) {
-		r.Use(httprate.LimitByIP(60, time.Minute))
+		r.Use(httprate.LimitBy(60, time.Minute, ipKey))
 		r.Route("/api/v1", func(r chi.Router) {
 			r.Get("/状态", s.handleStatus)
 			r.Get("/版本", s.handleVersion)
@@ -64,4 +63,9 @@ func (s *Server) Router() http.Handler {
 	})
 
 	return r
+}
+
+// ipKey 限流键：取对端地址。单后端内网个人助手场景无反向代理，RemoteAddr 即真实来源。
+func ipKey(r *http.Request) (string, error) {
+	return r.RemoteAddr, nil
 }

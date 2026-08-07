@@ -27,9 +27,9 @@ type Config struct {
 
 // Entry 内存日志条目（供日志查询 API 使用）
 type Entry struct {
-	Time    time.Time   `json:"time"`
-	Level   string      `json:"level"`
-	Message string      `json:"message"`
+	Time    time.Time      `json:"time"`
+	Level   string         `json:"level"`
+	Message string         `json:"message"`
 	Attrs   map[string]any `json:"attrs,omitempty"`
 }
 
@@ -141,10 +141,8 @@ func (h *bufferHandler) WithGroup(name string) slog.Handler {
 }
 
 var (
-	mu        sync.RWMutex
-	buf       *memoryBuffer
-	initErr   error
-	initialized bool
+	mu  sync.RWMutex
+	buf *memoryBuffer
 )
 
 // Init 初始化全局日志器，返回主 logger
@@ -188,7 +186,6 @@ func Init(cfg Config) (*slog.Logger, error) {
 	handler := &bufferHandler{next: base, buf: buf}
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
-	initialized = true
 	return logger, nil
 }
 

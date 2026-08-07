@@ -66,30 +66,30 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"状态":     "运行中",
 		"版本":     s.version,
-		"运行时长秒": int(time.Since(s.startTime).Seconds()),
-		"监听端口":  s.cfg.Server.Port,
-		"数据目录":  s.cfg.DataDir,
-		"日志级别":  logging.CurrentLevel(),
-		"Go版本":  runtime.Version(),
+		"运行时长秒":  int(time.Since(s.startTime).Seconds()),
+		"监听端口":   s.cfg.Server.Port,
+		"数据目录":   s.cfg.DataDir,
+		"日志级别":   logging.CurrentLevel(),
+		"Go版本":   runtime.Version(),
 		"内存占用MB": mem.Alloc / 1024 / 1024,
-		"供应商数":  len(s.cfg.Providers),
+		"供应商数":   len(s.cfg.Providers),
 	})
 }
 
 // handleVersion 版本信息（N-14：版本号单一来源）
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
-		"版本":  s.version,
-		"协议":  "v1",
+		"版本": s.version,
+		"协议": "v1",
 	})
 }
 
 // handleHealthz 健康检查（watchdog 用，豁免限流）
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"状态":  "ok",
-		"版本":  s.version,
-		"时间":  time.Now().Format("2006-01-02 15:04:05"),
+		"状态": "ok",
+		"版本": s.version,
+		"时间": time.Now().Format("2006-01-02 15:04:05"),
 	})
 }
 
