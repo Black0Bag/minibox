@@ -47,9 +47,9 @@ jobs:
 
       - name: Build
         run: |
-          VERSION="$(grep 'var Version' cmd/minibox/main.go 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-          if [ -z "$VERSION" ]; then VERSION="$(git describe --tags --always 2>/dev/null)"; fi
-          if [ -z "$VERSION" ]; then VERSION="$(date +%Y%m%d%H%M%S)"; fi
+          # 版本号单一来源：优先取最近 git tag（去 v 前缀），无 tag 则用 dev
+          VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          if [ -z "$VERSION" ]; then VERSION="dev"; fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "构建版本: $VERSION"
           mkdir -p dist
