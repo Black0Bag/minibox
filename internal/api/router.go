@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -18,9 +19,12 @@ import (
 	"github.com/Black0Bag/minibox/internal/device"
 	"github.com/Black0Bag/minibox/internal/distill"
 	"github.com/Black0Bag/minibox/internal/embed"
+	"github.com/Black0Bag/minibox/internal/heartbeat"
 	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/memory"
 	"github.com/Black0Bag/minibox/internal/monitor"
+	"github.com/Black0Bag/minibox/internal/scheduler"
+	"github.com/Black0Bag/minibox/internal/skill"
 	"github.com/Black0Bag/minibox/internal/subagent"
 	"github.com/Black0Bag/minibox/internal/todolist"
 	"github.com/Black0Bag/minibox/internal/tools"
@@ -44,6 +48,9 @@ type Server struct {
 	monitor     *monitor.Collector
 	degrader    *degrade.Degrader
 	devices     *device.Hub
+	sched       *scheduler.Scheduler
+	beats       *heartbeat.Engine
+	skills      *skill.Store
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
@@ -74,6 +81,14 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 		return m.CPU.Percent, m.Memory.UsedPercent
 	}, degrade.DefaultConfig())
 	s.devices = device.NewHub(filepath.Join(cfg.DataDir, "devices"))
+	// 调度 + 心跳 + Skill（M6）
+	s.sched = scheduler.NewScheduler(filepath.Join(cfg.DataDir, "schedule"))
+	s.beats = heartbeat.NewEngine(filepath.Join(cfg.DataDir, "heartbeat"))
+	s.skills = skill.NewStore(filepath.Join(cfg.DataDir, "skills"))
+	// 调度结果写知识库（结果沉淀，Phase 4）
+	if store != nil {
+		s.sched.SetKBSink(kbSink{store: store})
+	}
 	if s.chatLLM != nil {
 		reg := tools.NewRegistry()
 		reg.Register(tools.TimeTool{})
@@ -84,8 +99,31 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 		// subagent 引擎（M4）：Fan-out 并发（并发上限 3，深度先 2 层）
 		runner := subagent.NewAgentRunner(s.chatLLM.Chat, reg, s.subSideDir)
 		s.subEngine = subagent.New(runner, subagent.DefaultMaxConcurrent, subagent.DefaultMaxDepth)
+		// 心跳执行器（M6）：调用 LLM 执行，边界注入系统提示
+		s.beats.SetExecutor(heartbeatExec{chat: s.chatLLM})
 	}
 	return s
+}
+
+// kbSink 调度结果写知识库
+type kbSink struct{ store *memory.Store }
+
+func (k kbSink) Write(zone, title, content string) {
+	if k.store == nil {
+		return
+	}
+	_, _ = k.store.CreateEntry(zone, "schedule", title, content, nil, "scheduler")
+}
+
+// heartbeatExec 心跳任务 LLM 执行器（绑定用户边界）
+type heartbeatExec struct{ chat *llm.Client }
+
+func (h heartbeatExec) Execute(ctx context.Context, t heartbeat.Task) (string, error) {
+	msgs := []llm.Message{
+		{Role: "system", Content: "你是心跳任务执行助手。必须严格遵守以下用户预设边界：" + t.Boundaries + "\n执行结果要简洁。"},
+		{Role: "user", Content: t.Prompt},
+	}
+	return h.chat.Chat(ctx, msgs, llm.Options{MaxTokens: 1000, Temperature: 0.4})
 }
 
 // Router 构建路由（统一 /api/v1 前缀，N-13；RFC 7807 错误格式，N-09；限流，N-04）
@@ -146,6 +184,26 @@ func (s *Server) Router() http.Handler {
 			})
 			r.Get("/监控", s.handleMonitor)
 			r.Get("/降级", s.handleDegrade)
+			r.Route("/调度", func(r chi.Router) {
+				r.Post("/", s.handleScheduleCreate)
+				r.Get("/", s.handleScheduleList)
+				r.Get("/{id}", s.handleScheduleGet)
+				r.Post("/{id}/执行", s.handleScheduleRun)
+				r.Post("/{id}/取消", s.handleScheduleCancel)
+				r.Delete("/{id}", s.handleScheduleDelete)
+			})
+			r.Route("/心跳", func(r chi.Router) {
+				r.Post("/", s.handleHeartbeatCreate)
+				r.Get("/", s.handleHeartbeatList)
+				r.Post("/{id}/执行", s.handleHeartbeatRun)
+				r.Post("/{id}/退订", s.handleHeartbeatUnsubscribe)
+			})
+			r.Route("/技能", func(r chi.Router) {
+				r.Post("/", s.handleSkillCreate)
+				r.Get("/", s.handleSkillList)
+				r.Get("/匹配", s.handleSkillMatch)
+				r.Post("/沉淀", s.handleSkillRecord)
+			})
 			r.Route("/设备", func(r chi.Router) {
 				r.Post("/配对码", s.handleDevicePairingCode)
 				r.Post("/", s.handleDeviceRegister)
