@@ -30,3 +30,12 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# 敏感信息（禁止入库，隐私保护）
+/api
+/api.*
+*.key
+*.pem
+config.local.*
+.local/
+testdata/local/
