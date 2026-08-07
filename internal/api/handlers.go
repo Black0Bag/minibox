@@ -720,7 +720,38 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ch, err := s.chatLLM.ChatStream(r.Context(), req.Messages, llm.Options{MaxTokens: 4000, Temperature: 0.7})
+	// 记忆注入（Layer2 简化版）：检索知识库相关条目注入 system 上下文
+	messages := req.Messages
+	if s.store != nil {
+		var last string
+		for _, m := range messages {
+			if m.Role == "user" {
+				last = m.Content
+			}
+		}
+		if last != "" {
+			var results []memory.SearchResult
+			var err2 error
+			if s.embedClient != nil {
+				results, err2 = s.store.HybridSearch(last, "", 3, s.embedClient)
+			} else {
+				results, err2 = s.store.Search(last, "", 3)
+			}
+			if err2 == nil && len(results) > 0 {
+				var sb strings.Builder
+				sb.WriteString("以下是知识库中与你可能相关的历史条目，供参考（若无直接相关可忽略）：\n")
+				for i, r := range results {
+					if i >= 3 {
+						break
+					}
+					sb.WriteString("- " + r.Entry.Title + "：" + r.Entry.Content + "\n")
+				}
+				messages = append([]llm.Message{{Role: "system", Content: sb.String()}}, messages...)
+			}
+		}
+	}
+
+	ch, err := s.chatLLM.ChatStream(r.Context(), messages, llm.Options{MaxTokens: 4000, Temperature: 0.7})
 	if err != nil {
 		writeSSE(w, flusher, "error", `{"code":"LLM_GATEWAY_ERROR","detail":"`+redact(err.Error())+`"}`)
 		return
