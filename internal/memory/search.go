@@ -84,12 +84,12 @@ func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
 			var id int64
 			var sc float64
 			if err := rows.Scan(&id, &sc); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, fmt.Errorf("扫描全文结果: %w", err)
 			}
 			hits[id] = sc
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 
 	// 2. 短词 LIKE 兜底
@@ -113,14 +113,14 @@ func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
 		for rows.Next() {
 			var id int64
 			if err := rows.Scan(&id); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, err
 			}
 			if _, ok := hits[id]; !ok {
 				hits[id] = 0 // LIKE 命中权重低
 			}
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 
 	// 3. 组装结果

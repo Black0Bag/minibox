@@ -36,7 +36,7 @@ func Open(dataDir string) (*Store, error) {
 
 	s := &Store{db: db, dataDir: dataDir}
 	if err := s.migrate(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil

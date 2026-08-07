@@ -137,7 +137,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("初始化知识库失败: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// 构建 API 服务
 	apiSrv := api.NewServer(cfg, logger, Version, store)

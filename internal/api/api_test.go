@@ -25,7 +25,7 @@ func testServer(t *testing.T, cfg *config.Config) *Server {
 	if err != nil {
 		t.Fatalf("初始化知识库失败: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return NewServer(cfg, logger, "test-version", store)
 }
 

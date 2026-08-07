@@ -121,7 +121,7 @@ func (s *Store) ListEntries(zone, etype string, limit, offset int) ([]Entry, int
 	if err != nil {
 		return nil, 0, fmt.Errorf("列出条目: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	entries := []Entry{}
 	for rows.Next() {
