@@ -11,6 +11,7 @@ import (
 
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/logging"
+	"github.com/Black0Bag/minibox/internal/memory"
 )
 
 func testServer(t *testing.T, cfg *config.Config) *Server {
@@ -20,7 +21,12 @@ func testServer(t *testing.T, cfg *config.Config) *Server {
 		cfg.Server.Port = 8086
 	}
 	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	return NewServer(cfg, logger, "test-version")
+	store, err := memory.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("初始化知识库失败: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return NewServer(cfg, logger, "test-version", store)
 }
 
 func doReq(t *testing.T, s *Server, method, path, body string) *httptest.ResponseRecorder {
@@ -190,5 +196,82 @@ func TestMaskKey(t *testing.T) {
 	short := maskKey("abc")
 	if short != "***" {
 		t.Errorf("短 key 应显示 ***: %q", short)
+	}
+}
+
+// ============ 知识库 API 测试 ============
+
+const kbPath = "/api/v1/%E7%9F%A5%E8%AF%86%E5%BA%93" // 知识库 URL 编码
+
+func TestKnowledgeBaseAPI(t *testing.T) {
+	s := testServer(t, nil)
+	// 写入
+	rec := doReq(t, s, http.MethodPost, kbPath+"/", `{"zone":"store","type":"text","title":"测试","content":"minibox 的 logme 留痕系统开发记录","tags":["项目"],"source":"s1"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("写入应为 201，得到 %d: %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		ID   int64  `json:"id"`
+		Zone string `json:"zone"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.ID == 0 || created.Zone != "store" {
+		t.Errorf("写入响应异常: %s", rec.Body.String())
+	}
+
+	// 中文搜索
+	rec = doReq(t, s, http.MethodGet, kbPath+"/%E6%90%9C%E7%B4%A2?q=%E7%95%99%E7%97%95%E7%B3%BB%E7%BB%9F", "") // /搜索?q=留痕系统
+	if rec.Code != http.StatusOK {
+		t.Fatalf("搜索应为 200，得到 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "logme") {
+		t.Errorf("搜索应命中 logme 条目: %s", rec.Body.String())
+	}
+
+	// 读取
+	rec = doReq(t, s, http.MethodGet, kbPath+"/1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("读取应为 200，得到 %d", rec.Code)
+	}
+
+	// 列表
+	rec = doReq(t, s, http.MethodGet, kbPath+"/?zone=store", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("列表应为 200，得到 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"总数":1`) {
+		t.Errorf("列表总数应为 1: %s", rec.Body.String())
+	}
+
+	// 更新
+	rec = doReq(t, s, http.MethodPut, kbPath+"/1", `{"title":"新标题","content":"更新后的内容","tags":["a"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("更新应为 200，得到 %d", rec.Code)
+	}
+
+	// 删除
+	rec = doReq(t, s, http.MethodDelete, kbPath+"/1", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("删除应为 204，得到 %d", rec.Code)
+	}
+
+	// 删除后读取 404
+	rec = doReq(t, s, http.MethodGet, kbPath+"/1", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("删除后应为 404，得到 %d", rec.Code)
+	}
+}
+
+func TestKnowledgeBaseValidation(t *testing.T) {
+	s := testServer(t, nil)
+	// content 为空 → 400
+	rec := doReq(t, s, http.MethodPost, kbPath+"/", `{"content":""}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("空 content 应为 400，得到 %d", rec.Code)
+	}
+	// zone 非法 → 400
+	rec = doReq(t, s, http.MethodPost, kbPath+"/", `{"content":"x","zone":"bad"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("非法 zone 应为 400，得到 %d", rec.Code)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/fsutil"
 	"github.com/Black0Bag/minibox/internal/logging"
+	"github.com/Black0Bag/minibox/internal/memory"
 	"github.com/Black0Bag/minibox/internal/timestamp"
 )
 
@@ -131,8 +132,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	_ = files
 
+	// 初始化知识库（Phase 1：SQLite + FTS5 双区制）
+	store, err := memory.Open(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("初始化知识库失败: %w", err)
+	}
+	defer store.Close()
+
 	// 构建 API 服务
-	apiSrv := api.NewServer(cfg, logger, Version)
+	apiSrv := api.NewServer(cfg, logger, Version, store)
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr(),
 		Handler:           apiSrv.Router(),

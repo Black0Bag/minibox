@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/logging"
+	"github.com/Black0Bag/minibox/internal/memory"
 )
 
 // 敏感信息脱敏（N-05：API Key 等 token 统一脱敏，避免明文泄露）
@@ -241,4 +243,174 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 	s.cfg.Providers = append(s.cfg.Providers[:idx], s.cfg.Providers[idx+1:]...)
 	s.logger.Info("删除供应商", "name", name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ============ 知识库 API（Phase 1）============
+
+// kbCreateRequest 写入条目请求
+type kbCreateRequest struct {
+	Zone    string   `json:"zone"`
+	Type    string   `json:"type"`
+	Title   string   `json:"title"`
+	Content string   `json:"content"`
+	Tags    []string `json:"tags"`
+	Source  string   `json:"source"`
+}
+
+// handleKBCreate 写入知识条目（默认缓存区）
+func (s *Server) handleKBCreate(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "存储不可用")
+		return
+	}
+	var req kbCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", "JSON 解析失败")
+		return
+	}
+	if req.Content == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "content 不能为空")
+		return
+	}
+	if req.Zone == "" {
+		req.Zone = memory.ZoneCache
+	}
+	if req.Zone != memory.ZoneCache && req.Zone != memory.ZoneStore {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "zone 只能是 cache 或 store")
+		return
+	}
+	id, err := s.store.CreateEntry(req.Zone, req.Type, req.Title, req.Content, req.Tags, req.Source)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	s.logger.Info("写入知识条目", "id", id, "zone", req.Zone)
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "zone": req.Zone})
+}
+
+// handleKBGet 读取条目
+func (s *Server) handleKBGet(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "id 必须是数字")
+		return
+	}
+	e, err := s.store.GetEntry(id)
+	if errors.Is(err, memory.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", "条目不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, e)
+}
+
+// handleKBList 列表（?zone=&type=&limit=&offset=）
+func (s *Server) handleKBList(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	zone := r.URL.Query().Get("zone")
+	etype := r.URL.Query().Get("type")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	entries, total, err := s.store.ListEntries(zone, etype, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"条目": entries, "总数": total})
+}
+
+// handleKBSearch 全文搜索（?q=&zone=&limit=）
+func (s *Server) handleKBSearch(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	q := r.URL.Query().Get("q")
+	zone := r.URL.Query().Get("zone")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	results, err := s.store.Search(q, zone, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"结果": results, "总数": len(results)})
+}
+
+// handleKBUpdate 更新条目
+func (s *Server) handleKBUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "id 必须是数字")
+		return
+	}
+	var req kbCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", "JSON 解析失败")
+		return
+	}
+	err = s.store.UpdateEntry(id, req.Title, req.Content, req.Tags)
+	if errors.Is(err, memory.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", "条目不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "状态": "已更新"})
+}
+
+// handleKBDelete 删除条目
+func (s *Server) handleKBDelete(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "id 必须是数字")
+		return
+	}
+	err = s.store.DeleteEntry(id)
+	if errors.Is(err, memory.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", "条目不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleKBClear 清空区域（?zone=）
+func (s *Server) handleKBClear(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	zone := r.URL.Query().Get("zone")
+	if zone == "" {
+		zone = memory.ZoneCache
+	}
+	n, err := s.store.ClearZone(zone)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"已清空": n, "zone": zone})
 }
