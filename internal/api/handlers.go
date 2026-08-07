@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -618,4 +620,66 @@ func (s *Server) handleDistillDecay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"已衰减": n})
+}
+
+// ============ 快照 API（M2-4）============
+
+// snapshotDir 返回快照目录
+func (s *Server) snapshotDir() string {
+	return filepath.Join(s.cfg.DataDir, "snapshots")
+}
+
+// handleSnapshotCreate 创建一致性快照（VACUUM INTO）
+func (s *Server) handleSnapshotCreate(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	name, err := s.store.Snapshot(s.snapshotDir())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	s.logger.Info("创建快照", "name", name)
+	writeJSON(w, http.StatusCreated, map[string]any{"快照": name, "状态": "已创建"})
+}
+
+// handleSnapshotList 列出快照
+func (s *Server) handleSnapshotList(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	names, err := s.store.ListSnapshots(s.snapshotDir())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"快照列表": names, "总数": len(names)})
+}
+
+// handleSnapshotRestore 从快照恢复（POST /快照/恢复 {file}）
+func (s *Server) handleSnapshotRestore(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
+		return
+	}
+	var req struct {
+		File string `json:"file"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.File == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "file 不能为空")
+		return
+	}
+	path := filepath.Join(s.snapshotDir(), filepath.Base(req.File))
+	if _, err := os.Stat(path); err != nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", "快照文件不存在")
+		return
+	}
+	if err := s.store.Restore(path); err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	s.logger.Info("从快照恢复", "file", req.File)
+	writeJSON(w, http.StatusOK, map[string]any{"状态": "已恢复", "快照": req.File})
 }

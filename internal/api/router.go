@@ -74,6 +74,11 @@ func (s *Server) Router() http.Handler {
 				r.Put("/{name}", s.handleUpdateProvider)
 				r.Delete("/{name}", s.handleDeleteProvider)
 			})
+			r.Route("/快照", func(r chi.Router) {
+				r.Post("/", s.handleSnapshotCreate)
+				r.Get("/", s.handleSnapshotList)
+				r.Post("/恢复", s.handleSnapshotRestore)
+			})
 			r.Route("/蒸馏", func(r chi.Router) {
 				r.Post("/命中", s.handleDistillHit)
 				r.Post("/反例", s.handleDistillNegative)

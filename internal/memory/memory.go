@@ -16,6 +16,7 @@ import (
 type Store struct {
 	db      *sql.DB
 	dataDir string
+	dbPath  string
 }
 
 // Open 打开（或创建）知识库数据库
@@ -34,7 +35,7 @@ func Open(dataDir string) (*Store, error) {
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	s := &Store{db: db, dataDir: dataDir}
+	s := &Store{db: db, dataDir: dataDir, dbPath: path}
 	if err := s.migrate(); err != nil {
 		_ = db.Close()
 		return nil, err

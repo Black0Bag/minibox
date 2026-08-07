@@ -63,8 +63,9 @@ func TestDelete(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Delete 失败: ok=%v err=%v", ok, err)
 	}
-	if _, err := d.Delete("临时偏好"); err != nil {
-		// 已删除，不应再删到
+	ok2, _ := d.Delete("临时偏好")
+	if ok2 {
+		t.Error("二次删除应返回 false")
 	}
 	prefs, _ := d.List(10)
 	if len(prefs) != 0 {
