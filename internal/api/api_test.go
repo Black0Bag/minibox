@@ -20,8 +20,11 @@ func testServer(t *testing.T, cfg *config.Config) *Server {
 		cfg = &config.Config{}
 		cfg.Server.Port = 8086
 	}
+	if cfg.DataDir == "" {
+		cfg.DataDir = t.TempDir() // 隔离持久化目录，避免测试产物污染源码树
+	}
 	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	store, err := memory.Open(t.TempDir())
+	store, err := memory.Open(cfg.DataDir)
 	if err != nil {
 		t.Fatalf("初始化知识库失败: %v", err)
 	}
