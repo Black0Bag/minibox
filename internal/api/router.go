@@ -14,10 +14,13 @@ import (
 	"github.com/Black0Bag/minibox/internal/agent"
 	"github.com/Black0Bag/minibox/internal/compile"
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/degrade"
+	"github.com/Black0Bag/minibox/internal/device"
 	"github.com/Black0Bag/minibox/internal/distill"
 	"github.com/Black0Bag/minibox/internal/embed"
 	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/memory"
+	"github.com/Black0Bag/minibox/internal/monitor"
 	"github.com/Black0Bag/minibox/internal/subagent"
 	"github.com/Black0Bag/minibox/internal/todolist"
 	"github.com/Black0Bag/minibox/internal/tools"
@@ -38,6 +41,9 @@ type Server struct {
 	subEngine   *subagent.Engine
 	subSideDir  string
 	plans       *todolist.Driver
+	monitor     *monitor.Collector
+	degrader    *degrade.Degrader
+	devices     *device.Hub
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
@@ -58,6 +64,16 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 	// subagent 侧链日志目录 + to-do-list 计划目录（始终初始化，LLM 可选）
 	s.subSideDir = filepath.Join(cfg.DataDir, "subagents")
 	s.plans = todolist.NewDriver(filepath.Join(cfg.DataDir, "plans"))
+	// 监控 + 降级 + 设备（M5）
+	s.monitor = monitor.NewCollector()
+	s.degrader = degrade.New(func() (float64, float64) {
+		m, err := s.monitor.Collect()
+		if err != nil {
+			return 0, 0
+		}
+		return m.CPU.Percent, m.Memory.UsedPercent
+	}, degrade.DefaultConfig())
+	s.devices = device.NewHub(filepath.Join(cfg.DataDir, "devices"))
 	if s.chatLLM != nil {
 		reg := tools.NewRegistry()
 		reg.Register(tools.TimeTool{})
@@ -127,6 +143,18 @@ func (s *Server) Router() http.Handler {
 			r.Route("/subagent", func(r chi.Router) {
 				r.Post("/", s.handleSubagentDispatch)
 				r.Get("/{id}/日志", s.handleSubagentLog)
+			})
+			r.Get("/监控", s.handleMonitor)
+			r.Get("/降级", s.handleDegrade)
+			r.Route("/设备", func(r chi.Router) {
+				r.Post("/配对码", s.handleDevicePairingCode)
+				r.Post("/", s.handleDeviceRegister)
+				r.Get("/", s.handleDeviceList)
+				r.Get("/{id}", s.handleDeviceGet)
+				r.Post("/{id}/心跳", s.handleDeviceHeartbeat)
+				r.Post("/{id}/离线", s.handleDeviceOffline)
+				r.Delete("/{id}", s.handleDeviceUnregister)
+				r.Get("/审计", s.handleDeviceAudit)
 			})
 			r.Route("/计划", func(r chi.Router) {
 				r.Post("/", s.handlePlanCreate)
