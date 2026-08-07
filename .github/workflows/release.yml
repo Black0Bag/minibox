@@ -1,0 +1,112 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "master" ]
+    tags: [ "v*" ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+            ext: ""
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+            ext: ""
+          - target: windows-amd64
+            goos: windows
+            goarch: amd64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build
+        run: |
+          VERSION="$(grep 'var Version' cmd/minibox/main.go 2>/dev/null | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          if [ -z "$VERSION" ]; then VERSION="$(git describe --tags --always 2>/dev/null)"; fi
+          if [ -z "$VERSION" ]; then VERSION="$(date +%Y%m%d%H%M%S)"; fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "构建版本: $VERSION"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags "-X main.Version=$VERSION" \
+            -o "dist/minibox-$VERSION-${{ matrix.target }}${{ matrix.ext }}" ./cmd/minibox
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: minibox-${{ matrix.target }}
+          path: dist/minibox-*
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          ls -la
+          sha256sum minibox-* > checksums.sha256
+          cat checksums.sha256
+
+      - name: Create stable Release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create auto dev Release (push)
+        if: github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: dev-${{ github.sha }}
+          name: "minibox dev 构建 #${{ github.run_number }}"
+          body: |
+            ## 自动构建（dev）
+            - commit: `${{ github.sha }}`
+            - 来源分支: `${{ github.ref_name }}`
+            - 触发方式: ${{ github.event_name }}
+            - checksums.sha256 已生成，供自升级 SHA256 校验使用
+          files: dist/*
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
