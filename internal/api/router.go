@@ -12,6 +12,7 @@ import (
 
 	"github.com/Black0Bag/minibox/internal/compile"
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/distill"
 	"github.com/Black0Bag/minibox/internal/embed"
 	"github.com/Black0Bag/minibox/internal/memory"
 )
@@ -25,6 +26,7 @@ type Server struct {
 	store       *memory.Store
 	embedClient *embed.Client
 	compiler    *compile.Compiler
+	distiller   *distill.Distiller
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
@@ -32,6 +34,9 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 	s := &Server{cfg: cfg, logger: logger, version: version, startTime: time.Now(), store: store, compiler: compiler}
 	if cfg.Embedding.Enabled && cfg.Embedding.BaseURL != "" {
 		s.embedClient = embed.New(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Model)
+	}
+	if store != nil {
+		s.distiller = distill.NewDistiller(store)
 	}
 	return s
 }
@@ -68,6 +73,13 @@ func (s *Server) Router() http.Handler {
 				r.Get("/{name}", s.handleGetProvider)
 				r.Put("/{name}", s.handleUpdateProvider)
 				r.Delete("/{name}", s.handleDeleteProvider)
+			})
+			r.Route("/蒸馏", func(r chi.Router) {
+				r.Post("/命中", s.handleDistillHit)
+				r.Post("/反例", s.handleDistillNegative)
+				r.Get("/", s.handleDistillList)
+				r.Post("/老化", s.handleDistillDecay)
+				r.Delete("/{keyword}", s.handleDistillDelete)
 			})
 			r.Route("/编译", func(r chi.Router) {
 				r.Post("/", s.handleCompileSubmit)

@@ -526,3 +526,96 @@ func (s *Server) handleCompileList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"任务": tasks, "总数": len(tasks)})
 }
+
+// ============ 蒸馏 API（M2-3）============
+
+// handleDistillHit 正向证据：命中关键词上调概率
+func (s *Server) handleDistillHit(w http.ResponseWriter, r *http.Request) {
+	if s.distiller == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "蒸馏未初始化", "")
+		return
+	}
+	var req struct {
+		Keyword    string `json:"keyword"`
+		Importance string `json:"importance"`
+		Source     string `json:"source"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Keyword == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "keyword 不能为空")
+		return
+	}
+	if err := s.distiller.Hit(req.Keyword, req.Importance, req.Source); err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	s.logger.Info("蒸馏命中", "keyword", req.Keyword)
+	writeJSON(w, http.StatusOK, map[string]any{"keyword": req.Keyword, "状态": "命中已记录"})
+}
+
+// handleDistillNegative 反向证据：用户否定下调概率
+func (s *Server) handleDistillNegative(w http.ResponseWriter, r *http.Request) {
+	if s.distiller == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "蒸馏未初始化", "")
+		return
+	}
+	var req struct {
+		Keyword string `json:"keyword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Keyword == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "keyword 不能为空")
+		return
+	}
+	if err := s.distiller.Negative(req.Keyword); err != nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keyword": req.Keyword, "状态": "反例已记录"})
+}
+
+// handleDistillList 列出蒸馏偏好
+func (s *Server) handleDistillList(w http.ResponseWriter, r *http.Request) {
+	if s.distiller == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "蒸馏未初始化", "")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	prefs, err := s.distiller.List(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"偏好": prefs, "总数": len(prefs)})
+}
+
+// handleDistillDelete 删除偏好
+func (s *Server) handleDistillDelete(w http.ResponseWriter, r *http.Request) {
+	if s.distiller == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "蒸馏未初始化", "")
+		return
+	}
+	keyword := chi.URLParam(r, "keyword")
+	ok, err := s.distiller.Delete(keyword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", "偏好不存在")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDistillDecay 触发老化衰减（T-07 TTL）
+func (s *Server) handleDistillDecay(w http.ResponseWriter, r *http.Request) {
+	if s.distiller == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "蒸馏未初始化", "")
+		return
+	}
+	n, err := s.distiller.Decay()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"已衰减": n})
+}

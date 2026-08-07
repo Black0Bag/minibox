@@ -47,6 +47,7 @@ func (s *Store) migrate() error {
 	migrations := []func(*sql.Tx) error{
 		createSchemaV1,
 		createSchemaV2,
+		createSchemaV3,
 	}
 	var version int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -136,6 +137,29 @@ func createSchemaV2(tx *sql.Tx) error {
 	for _, s := range stmts {
 		if _, err := tx.Exec(s); err != nil {
 			return fmt.Errorf("建表失败(v2): %w", err)
+		}
+	}
+	return nil
+}
+
+// createSchemaV3 用户蒸馏偏好表（M2-3，T-07：关键词+概率+证据+重要性）
+func createSchemaV3(tx *sql.Tx) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS user_prefs (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			keyword     TEXT NOT NULL UNIQUE,
+			probability REAL NOT NULL DEFAULT 0.5,
+			evidence    INTEGER NOT NULL DEFAULT 0,
+			importance  TEXT NOT NULL DEFAULT 'medium', -- permanent/high/medium/low
+			source      TEXT NOT NULL DEFAULT '',
+			last_hit    TEXT NOT NULL DEFAULT '',
+			created_at  TEXT NOT NULL,
+			updated_at  TEXT NOT NULL
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("建表失败(v3): %w", err)
 		}
 	}
 	return nil
