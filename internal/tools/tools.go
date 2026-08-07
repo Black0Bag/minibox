@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +15,24 @@ type Tool interface {
 	Name() string
 	Description() string
 	Run(ctx context.Context, args string) (string, error)
+}
+
+// toolCallRe 文本协议工具调用：<tool name="工具名" args="参数"></tool>
+// 供 agent 与 subagent 共用（单一解析来源，避免重复正则）
+var toolCallRe = regexp.MustCompile(`<tool name="([^"]+)" args="([^"]*)"></tool>`)
+
+// ParseToolCall 从输出中解析第一个工具调用，返回 (name, args, 是否命中)
+func ParseToolCall(out string) (string, string, bool) {
+	m := toolCallRe.FindStringSubmatch(out)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// CleanToolMarkers 清理输出中残留的工具标记
+func CleanToolMarkers(out string) string {
+	return strings.TrimSpace(toolCallRe.ReplaceAllString(out, ""))
 }
 
 // Registry 工具注册表（统一注册接口，支持运行时动态注册）
@@ -47,6 +66,29 @@ func (r *Registry) Run(ctx context.Context, name, args string) (string, error) {
 		return "", fmt.Errorf("工具 %q 不存在", name)
 	}
 	return t.Run(ctx, args)
+}
+
+// Subset 按白名单过滤出工具子集（subagent 工具白名单，T-05）。
+// 白名单为空表示不限制；不在白名单的工具被排除。
+func (r *Registry) Subset(whitelist []string) *Registry {
+	if len(whitelist) == 0 {
+		sub := NewRegistry()
+		for n, t := range r.tools {
+			sub.tools[n] = t
+		}
+		return sub
+	}
+	allowed := make(map[string]bool, len(whitelist))
+	for _, n := range whitelist {
+		allowed[n] = true
+	}
+	sub := NewRegistry()
+	for n, t := range r.tools {
+		if allowed[n] {
+			sub.tools[n] = t
+		}
+	}
+	return sub
 }
 
 // LLMSpecs 生成供 LLM 使用的工具说明（文本协议）

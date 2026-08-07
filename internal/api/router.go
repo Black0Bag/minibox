@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +18,8 @@ import (
 	"github.com/Black0Bag/minibox/internal/embed"
 	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/memory"
+	"github.com/Black0Bag/minibox/internal/subagent"
+	"github.com/Black0Bag/minibox/internal/todolist"
 	"github.com/Black0Bag/minibox/internal/tools"
 )
 
@@ -32,6 +35,9 @@ type Server struct {
 	distiller   *distill.Distiller
 	chatLLM     *llm.Client
 	agent       *agent.Agent
+	subEngine   *subagent.Engine
+	subSideDir  string
+	plans       *todolist.Driver
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
@@ -49,6 +55,9 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 			break
 		}
 	}
+	// subagent 侧链日志目录 + to-do-list 计划目录（始终初始化，LLM 可选）
+	s.subSideDir = filepath.Join(cfg.DataDir, "subagents")
+	s.plans = todolist.NewDriver(filepath.Join(cfg.DataDir, "plans"))
 	if s.chatLLM != nil {
 		reg := tools.NewRegistry()
 		reg.Register(tools.TimeTool{})
@@ -56,6 +65,9 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 			reg.Register(tools.NewKBSearchTool(store))
 		}
 		s.agent = agent.New(s.chatLLM, reg, 3)
+		// subagent 引擎（M4）：Fan-out 并发（并发上限 3，深度先 2 层）
+		runner := subagent.NewAgentRunner(s.chatLLM.Chat, reg, s.subSideDir)
+		s.subEngine = subagent.New(runner, subagent.DefaultMaxConcurrent, subagent.DefaultMaxDepth)
 	}
 	return s
 }
@@ -112,6 +124,18 @@ func (s *Server) Router() http.Handler {
 			})
 			r.Post("/对话/流式", s.handleChatStream)
 			r.Post("/对话", s.handleChat)
+			r.Route("/subagent", func(r chi.Router) {
+				r.Post("/", s.handleSubagentDispatch)
+				r.Get("/{id}/日志", s.handleSubagentLog)
+			})
+			r.Route("/计划", func(r chi.Router) {
+				r.Post("/", s.handlePlanCreate)
+				r.Get("/", s.handlePlanList)
+				r.Get("/{id}", s.handlePlanGet)
+				r.Post("/{id}/执行", s.handlePlanExecute)
+				r.Post("/{id}/回滚", s.handlePlanRollback)
+				r.Delete("/{id}", s.handlePlanDelete)
+			})
 			r.Route("/知识库", func(r chi.Router) {
 				r.Post("/", s.handleKBCreate)
 				r.Get("/", s.handleKBList)

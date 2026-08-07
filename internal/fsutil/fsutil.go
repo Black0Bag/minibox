@@ -1,15 +1,27 @@
 package fsutil
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Black0Bag/minibox/internal/timestamp"
 )
+
+// NewID 生成短随机 ID（hex，8 字节 → 16 字符），用于计划/任务标识
+func NewID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("id-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
 
 // 错误定义
 var (

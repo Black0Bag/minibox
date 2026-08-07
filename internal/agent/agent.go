@@ -3,15 +3,11 @@ package agent
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/tools"
 )
-
-// toolCallRe 文本协议工具调用：<tool name="工具名" args="参数"></tool>
-var toolCallRe = regexp.MustCompile(`<tool name="([^"]+)" args="([^"]*)"></tool>`)
 
 // Agent 精简 AgentLoop：LLM → 工具决策 → 执行 → 观察 → 循环 → 最终回答
 type Agent struct {
@@ -42,12 +38,11 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message) (string, error)
 		}
 		resp = out
 
-		m := toolCallRe.FindStringSubmatch(out)
-		if m == nil {
+		name, args, ok := tools.ParseToolCall(out)
+		if !ok {
 			// 无工具调用，清理可能的残留标记后返回
-			return strings.TrimSpace(toolCallRe.ReplaceAllString(out, "")), nil
+			return tools.CleanToolMarkers(out), nil
 		}
-		name, args := m[1], m[2]
 		result, err := a.tools.Run(ctx, name, args)
 		if err != nil {
 			result = "工具执行错误：" + err.Error()
