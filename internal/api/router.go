@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/go-chi/httprate"
 
 	"github.com/Black0Bag/minibox/internal/agent"
+	"github.com/Black0Bag/minibox/internal/backup"
 	"github.com/Black0Bag/minibox/internal/compile"
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/degrade"
@@ -28,6 +30,7 @@ import (
 	"github.com/Black0Bag/minibox/internal/subagent"
 	"github.com/Black0Bag/minibox/internal/todolist"
 	"github.com/Black0Bag/minibox/internal/tools"
+	"github.com/Black0Bag/minibox/internal/upgrade"
 )
 
 // Server HTTP API 服务
@@ -51,6 +54,8 @@ type Server struct {
 	sched       *scheduler.Scheduler
 	beats       *heartbeat.Engine
 	skills      *skill.Store
+	backups     *backup.Manager
+	upgrader    *upgrade.Manager
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
@@ -89,6 +94,16 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 	if store != nil {
 		s.sched.SetKBSink(kbSink{store: store})
 	}
+	// 备份（M7）：VACUUM INTO 快照 + 保留 5 份，间隔 1h
+	if store != nil {
+		s.backups = backup.NewManager(filepath.Join(cfg.DataDir, "snapshots"), store, 5, time.Hour)
+	}
+	// 自升级（M7）：watchdog 指向本服务健康检查（host 为空则不启用探活）
+	healthURL := ""
+	if cfg.Server.Host != "" {
+		healthURL = fmt.Sprintf("http://%s/api/v1/healthz", cfg.Addr())
+	}
+	s.upgrader = upgrade.NewManager(healthURL, 0)
 	if s.chatLLM != nil {
 		reg := tools.NewRegistry()
 		reg.Register(tools.TimeTool{})
@@ -203,6 +218,16 @@ func (s *Server) Router() http.Handler {
 				r.Get("/", s.handleSkillList)
 				r.Get("/匹配", s.handleSkillMatch)
 				r.Post("/沉淀", s.handleSkillRecord)
+			})
+			r.Route("/备份", func(r chi.Router) {
+				r.Post("/", s.handleBackupRun)
+				r.Get("/", s.handleBackupList)
+				r.Get("/记录", s.handleBackupRecords)
+			})
+			r.Route("/升级", func(r chi.Router) {
+				r.Get("/", s.handleUpgradeStatus)
+				r.Post("/检查", s.handleUpgradeCheck)
+				r.Post("/应用", s.handleUpgradeApply)
 			})
 			r.Route("/设备", func(r chi.Router) {
 				r.Post("/配对码", s.handleDevicePairingCode)
