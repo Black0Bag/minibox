@@ -14,8 +14,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Black0Bag/minibox/internal/api"
+	"github.com/Black0Bag/minibox/internal/compile"
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/fsutil"
+	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/logging"
 	"github.com/Black0Bag/minibox/internal/memory"
 	"github.com/Black0Bag/minibox/internal/timestamp"
@@ -139,8 +141,20 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = store.Close() }()
 
+	// 编译管道（M2-2）：使用第一个启用的 LLM 供应商
+	var compiler *compile.Compiler
+	for _, p := range cfg.Providers {
+		if p.Enabled {
+			llmClient := llm.New(p.BaseURL, p.APIKey, p.Model)
+			compiler = compile.NewCompiler(store, llmClient)
+			compiler.Start()
+			logger.Info("编译管道已启动", "provider", p.Name, "model", p.Model)
+			break
+		}
+	}
+
 	// 构建 API 服务
-	apiSrv := api.NewServer(cfg, logger, Version, store)
+	apiSrv := api.NewServer(cfg, logger, Version, store, compiler)
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr(),
 		Handler:           apiSrv.Router(),

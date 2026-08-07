@@ -26,7 +26,7 @@ func testServer(t *testing.T, cfg *config.Config) *Server {
 		t.Fatalf("初始化知识库失败: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return NewServer(cfg, logger, "test-version", store)
+	return NewServer(cfg, logger, "test-version", store, nil)
 }
 
 func doReq(t *testing.T, s *Server, method, path, body string) *httptest.ResponseRecorder {

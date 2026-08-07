@@ -46,6 +46,7 @@ func Open(dataDir string) (*Store, error) {
 func (s *Store) migrate() error {
 	migrations := []func(*sql.Tx) error{
 		createSchemaV1,
+		createSchemaV2,
 	}
 	var version int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -116,4 +117,26 @@ func (s *Store) DB() *sql.DB { return s.db }
 // Close 关闭数据库
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// createSchemaV2 编译管道任务表（M2-2）
+func createSchemaV2(tx *sql.Tx) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS compile_tasks (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_type TEXT NOT NULL,          -- url / text
+			content     TEXT NOT NULL,
+			status      TEXT NOT NULL DEFAULT 'pending', -- pending/running/done/failed
+			result_id   INTEGER,                -- 编译产出的条目 ID
+			error_msg   TEXT NOT NULL DEFAULT '',
+			created_at  TEXT NOT NULL,
+			updated_at  TEXT NOT NULL
+		)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("建表失败(v2): %w", err)
+		}
+	}
+	return nil
 }

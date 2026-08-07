@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/go-chi/httprate"
 
+	"github.com/Black0Bag/minibox/internal/compile"
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/embed"
 	"github.com/Black0Bag/minibox/internal/memory"
@@ -23,11 +24,12 @@ type Server struct {
 	startTime   time.Time
 	store       *memory.Store
 	embedClient *embed.Client
+	compiler    *compile.Compiler
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
-func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *memory.Store) *Server {
-	s := &Server{cfg: cfg, logger: logger, version: version, startTime: time.Now(), store: store}
+func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *memory.Store, compiler *compile.Compiler) *Server {
+	s := &Server{cfg: cfg, logger: logger, version: version, startTime: time.Now(), store: store, compiler: compiler}
 	if cfg.Embedding.Enabled && cfg.Embedding.BaseURL != "" {
 		s.embedClient = embed.New(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Model)
 	}
@@ -66,6 +68,11 @@ func (s *Server) Router() http.Handler {
 				r.Get("/{name}", s.handleGetProvider)
 				r.Put("/{name}", s.handleUpdateProvider)
 				r.Delete("/{name}", s.handleDeleteProvider)
+			})
+			r.Route("/编译", func(r chi.Router) {
+				r.Post("/", s.handleCompileSubmit)
+				r.Get("/", s.handleCompileList)
+				r.Get("/{id}", s.handleCompileGet)
 			})
 			r.Route("/知识库", func(r chi.Router) {
 				r.Post("/", s.handleKBCreate)

@@ -464,3 +464,65 @@ func (s *Server) handleKBClear(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"已清空": n, "zone": zone})
 }
+
+// ============ 编译管道 API（M2-2）============
+
+// handleCompileSubmit 提交编译任务（POST /编译 {type,content}）
+func (s *Server) handleCompileSubmit(w http.ResponseWriter, r *http.Request) {
+	if s.compiler == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "编译管道未初始化", "未配置 LLM 供应商")
+		return
+	}
+	var req struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", "JSON 解析失败")
+		return
+	}
+	if req.Content == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "content 不能为空")
+		return
+	}
+	id, err := s.compiler.Submit(req.Type, req.Content)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": id, "状态": "已提交"})
+}
+
+// handleCompileGet 查询编译任务状态
+func (s *Server) handleCompileGet(w http.ResponseWriter, r *http.Request) {
+	if s.compiler == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "编译管道未初始化", "")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "id 必须是数字")
+		return
+	}
+	t, err := s.compiler.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+// handleCompileList 编译任务列表
+func (s *Server) handleCompileList(w http.ResponseWriter, r *http.Request) {
+	if s.compiler == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "编译管道未初始化", "")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	tasks, err := s.compiler.List(limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"任务": tasks, "总数": len(tasks)})
+}
