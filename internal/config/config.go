@@ -45,10 +45,10 @@ type Config struct {
 // Default 返回默认配置
 func Default() Config {
 	return Config{
-		Server:  ServerConfig{Host: "0.0.0.0", Port: 8086},
-		Logging: logging.Default(),
+		Server:    ServerConfig{Host: "0.0.0.0", Port: 8086},
+		Logging:   logging.Default(),
 		Providers: []Provider{},
-		DataDir: "data",
+		DataDir:   "data",
 	}
 }
 

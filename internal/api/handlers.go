@@ -796,3 +796,24 @@ func jsonStr(s string) string {
 	b, _ := json.Marshal(redact(s))
 	return string(b)
 }
+
+// handleChat 非流式对话（AgentLoop + 工具调用）
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if s.agent == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Agent 未初始化", "未配置 LLM 供应商")
+		return
+	}
+	var req struct {
+		Messages []llm.Message `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Messages) == 0 {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "messages 不能为空")
+		return
+	}
+	out, err := s.agent.Run(r.Context(), req.Messages)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "LLM_GATEWAY_ERROR", "模型服务异常", redact(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"回答": redact(out)})
+}

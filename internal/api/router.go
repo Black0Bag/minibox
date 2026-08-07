@@ -10,12 +10,14 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/go-chi/httprate"
 
+	"github.com/Black0Bag/minibox/internal/agent"
 	"github.com/Black0Bag/minibox/internal/compile"
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/distill"
 	"github.com/Black0Bag/minibox/internal/embed"
 	"github.com/Black0Bag/minibox/internal/llm"
 	"github.com/Black0Bag/minibox/internal/memory"
+	"github.com/Black0Bag/minibox/internal/tools"
 )
 
 // Server HTTP API 服务
@@ -29,6 +31,7 @@ type Server struct {
 	compiler    *compile.Compiler
 	distiller   *distill.Distiller
 	chatLLM     *llm.Client
+	agent       *agent.Agent
 }
 
 // NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
@@ -45,6 +48,14 @@ func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *m
 			s.chatLLM = llm.New(p.BaseURL, p.APIKey, p.Model)
 			break
 		}
+	}
+	if s.chatLLM != nil {
+		reg := tools.NewRegistry()
+		reg.Register(tools.TimeTool{})
+		if store != nil {
+			reg.Register(tools.NewKBSearchTool(store))
+		}
+		s.agent = agent.New(s.chatLLM, reg, 3)
 	}
 	return s
 }
@@ -100,6 +111,7 @@ func (s *Server) Router() http.Handler {
 				r.Get("/{id}", s.handleCompileGet)
 			})
 			r.Post("/对话/流式", s.handleChatStream)
+			r.Post("/对话", s.handleChat)
 			r.Route("/知识库", func(r chi.Router) {
 				r.Post("/", s.handleKBCreate)
 				r.Get("/", s.handleKBList)
