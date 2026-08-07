@@ -1,9 +1,12 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/Black0Bag/minibox/internal/embed"
 )
 
 // SearchResult 搜索结果
@@ -41,22 +44,16 @@ func extractWords(q string) (long []string, short []string) {
 	return
 }
 
-// Search FTS5 全文搜索（trigram 中文分词 + 短词 LIKE 兜底）
-// 说明：trigram tokenizer 要求查询项 >= 3 字符；1-2 字短词用 LIKE 兜底（已验证方案）。
-func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
+// ftsRanked FTS5 全文检索，返回 id → rank（rank 0 最相关；trigram 中文 + 短词 LIKE 兜底）
+func (s *Store) ftsRanked(query, zone string) (map[int64]int, error) {
+	ranked := map[int64]int{}
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return nil, nil
+		return ranked, nil
 	}
 
 	cjkLong, cjkShort := extractCJKBlocks(query)
 	wordLong, wordShort := extractWords(query)
-
-	// 1. FTS trigram 检索
-	hits := map[int64]float64{}
 
 	var matchParts []string
 	for _, t := range cjkLong {
@@ -66,6 +63,7 @@ func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
 		matchParts = append(matchParts, `"`+t+`"`)
 	}
 
+	nextRank := 0
 	if len(matchParts) > 0 {
 		match := strings.Join(matchParts, " OR ")
 		where := "WHERE entries_fts MATCH ?"
@@ -74,25 +72,27 @@ func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
 			where += " AND entries.zone = ?"
 			args = append(args, zone)
 		}
-		rows, err := s.db.Query(`SELECT entries_fts.rowid, bm25(entries_fts) AS score
+		rows, err := s.db.Query(`SELECT entries_fts.rowid
 			FROM entries_fts JOIN entries ON entries.id = entries_fts.rowid
-			`+where+` ORDER BY score LIMIT ?`, append(args, limit*2)...)
+			`+where+` ORDER BY bm25(entries_fts) LIMIT 200`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("全文检索: %w", err)
 		}
 		for rows.Next() {
 			var id int64
-			var sc float64
-			if err := rows.Scan(&id, &sc); err != nil {
+			if err := rows.Scan(&id); err != nil {
 				_ = rows.Close()
-				return nil, fmt.Errorf("扫描全文结果: %w", err)
+				return nil, err
 			}
-			hits[id] = sc
+			if _, ok := ranked[id]; !ok {
+				ranked[id] = nextRank
+				nextRank++
+			}
 		}
 		_ = rows.Close()
 	}
 
-	// 2. 短词 LIKE 兜底
+	// 短词 LIKE 兜底
 	shorts := append(append([]string{}, cjkShort...), wordShort...)
 	if len(shorts) > 0 {
 		var likes []string
@@ -106,7 +106,7 @@ func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
 			where += " AND entries.zone = ?"
 			args = append(args, zone)
 		}
-		rows, err := s.db.Query(`SELECT entries.id FROM entries `+where+` LIMIT ?`, append(args, limit)...)
+		rows, err := s.db.Query(`SELECT entries.id FROM entries `+where+` LIMIT 100`, args...)
 		if err != nil {
 			return nil, fmt.Errorf("短词检索: %w", err)
 		}
@@ -116,16 +116,89 @@ func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
 				_ = rows.Close()
 				return nil, err
 			}
-			if _, ok := hits[id]; !ok {
-				hits[id] = 0 // LIKE 命中权重低
+			if _, ok := ranked[id]; !ok {
+				ranked[id] = nextRank
+				nextRank++
 			}
 		}
 		_ = rows.Close()
 	}
+	return ranked, nil
+}
 
-	// 3. 组装结果
-	results := make([]SearchResult, 0, len(hits))
-	for id := range hits {
+// Search FTS5 全文搜索（trigram 中文分词 + 短词 LIKE 兜底）
+func (s *Store) Search(query, zone string, limit int) ([]SearchResult, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	ranked, err := s.ftsRanked(query, zone)
+	if err != nil {
+		return nil, err
+	}
+	return s.resultsFromRanked(ranked, limit)
+}
+
+// HybridSearch FTS5 + 向量 RRF 融合检索
+// 说明：embedding 查询用真实 API（NVIDIA nemotron-3-embed-1b），与 FTS5 结果按 RRF(k=60) 融合。
+func (s *Store) HybridSearch(query, zone string, limit int, ec *embed.Client) ([]SearchResult, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	fts, err := s.ftsRanked(query, zone)
+	if err != nil {
+		return nil, err
+	}
+	vecIDs := map[int64]int{}
+	if ec != nil {
+		vecs, eerr := ec.Embed(context.Background(), []string{query})
+		if eerr == nil && len(vecs) > 0 {
+			hits, verr := s.VectorSearch(vecs[0], limit*2)
+			if verr == nil {
+				for i, h := range hits {
+					vecIDs[h.EntryID] = i
+				}
+			}
+		}
+	}
+	ids := hybridFuse(fts, vecIDs)
+	results := make([]SearchResult, 0, len(ids))
+	count := 0
+	for _, id := range ids {
+		e, gerr := s.GetEntry(id)
+		if gerr != nil {
+			continue
+		}
+		if zone != "" && e.Zone != zone {
+			continue
+		}
+		results = append(results, SearchResult{Entry: e})
+		count++
+		if count >= limit {
+			break
+		}
+	}
+	return results, nil
+}
+
+// resultsFromRanked 从 rank map 组装排序结果
+func (s *Store) resultsFromRanked(ranked map[int64]int, limit int) ([]SearchResult, error) {
+	ids := make([]int64, 0, len(ranked))
+	for id := range ranked {
+		ids = append(ids, id)
+	}
+	// 按 rank 排序
+	for i := 0; i < len(ids); i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if ranked[ids[j]] < ranked[ids[i]] {
+				ids[i], ids[j] = ids[j], ids[i]
+			}
+		}
+	}
+	results := make([]SearchResult, 0, len(ids))
+	for i, id := range ids {
+		if i >= limit {
+			break
+		}
 		e, err := s.GetEntry(id)
 		if err != nil {
 			continue

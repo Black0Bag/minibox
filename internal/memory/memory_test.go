@@ -175,3 +175,42 @@ func TestClearZone(t *testing.T) {
 		t.Errorf("清空后 cache 区应 0 条，得到 %d", total)
 	}
 }
+
+// fakeVec 生成 2048 维测试向量（前几位有语义，其余为 0）
+func fakeVec(prefix []float32) []float32 {
+	v := make([]float32, DefaultVecDim)
+	copy(v, prefix)
+	return v
+}
+
+func TestVectorSearch(t *testing.T) {
+	s := openTest(t)
+	id1, _ := s.CreateEntry(ZoneStore, "text", "", "喜欢编程和写代码", nil, "")
+	id2, _ := s.CreateEntry(ZoneStore, "text", "", "热爱运动和健身", nil, "")
+	if err := s.SetVector(id1, fakeVec([]float32{1, 0, 0, 0})); err != nil {
+		t.Fatalf("SetVector id1 失败: %v", err)
+	}
+	if err := s.SetVector(id2, fakeVec([]float32{0, 1, 0, 0})); err != nil {
+		t.Fatalf("SetVector id2 失败: %v", err)
+	}
+	hits, err := s.VectorSearch(fakeVec([]float32{0.9, 0.1, 0, 0}), 10)
+	if err != nil {
+		t.Fatalf("VectorSearch 失败: %v（vec0 可能不可用）", err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("向量检索无结果")
+	}
+	if hits[0].EntryID != id1 {
+		t.Errorf("最相似应为 id1（编程），得到 id=%d", hits[0].EntryID)
+	}
+}
+
+func TestHybridFuse(t *testing.T) {
+	fts := map[int64]int{1: 1, 2: 2}
+	vec := map[int64]int{2: 1, 3: 2}
+	ids := hybridFuse(fts, vec)
+	// 2 同时被两者命中，应排第一
+	if len(ids) == 0 || ids[0] != 2 {
+		t.Errorf("RRF 融合后 id2 应排第一，得到 %v", ids)
+	}
+}

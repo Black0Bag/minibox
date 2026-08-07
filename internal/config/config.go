@@ -24,21 +24,31 @@ type Provider struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`   // 是否启用
 }
 
+// EmbeddingConfig 向量 embedding 配置（sqlite-vec 向量检索，N-11）
+type EmbeddingConfig struct {
+	Enabled bool   `yaml:"enabled"`  // 是否启用向量检索
+	BaseURL string `yaml:"base_url"` // OpenAI 兼容 embedding API 地址
+	APIKey  string `yaml:"api_key"`  // 密钥
+	Model   string `yaml:"model"`    // embedding 模型
+	Dim     int    `yaml:"dim"`      // 向量维度（换模型需重建向量表）
+}
+
 // Config 顶层配置
 type Config struct {
-	Server    ServerConfig   `yaml:"server"`
-	Logging   logging.Config `yaml:"logging"`
-	Providers []Provider     `yaml:"providers"`
-	DataDir   string         `yaml:"data_dir"` // 数据目录（数据库/日志）
+	Server    ServerConfig    `yaml:"server"`
+	Logging   logging.Config  `yaml:"logging"`
+	Providers []Provider      `yaml:"providers"`
+	Embedding EmbeddingConfig `yaml:"embedding"`
+	DataDir   string          `yaml:"data_dir"` // 数据目录（数据库/日志）
 }
 
 // Default 返回默认配置
 func Default() Config {
 	return Config{
-		Server:    ServerConfig{Host: "0.0.0.0", Port: 8086},
-		Logging:   logging.Default(),
+		Server:  ServerConfig{Host: "0.0.0.0", Port: 8086},
+		Logging: logging.Default(),
 		Providers: []Provider{},
-		DataDir:   "data",
+		DataDir: "data",
 	}
 }
 

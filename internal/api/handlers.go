@@ -329,7 +329,7 @@ func (s *Server) handleKBList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"条目": entries, "总数": total})
 }
 
-// handleKBSearch 全文搜索（?q=&zone=&limit=）
+// handleKBSearch 全文搜索（?q=&zone=&limit=；配置了 embedding 时自动 RRF 融合向量）
 func (s *Server) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "知识库未初始化", "")
@@ -338,12 +338,62 @@ func (s *Server) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	zone := r.URL.Query().Get("zone")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	results, err := s.store.Search(q, zone, limit)
+	var results []memory.SearchResult
+	var err error
+	if s.embedClient != nil {
+		results, err = s.store.HybridSearch(q, zone, limit, s.embedClient)
+	} else {
+		results, err = s.store.Search(q, zone, limit)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"结果": results, "总数": len(results)})
+}
+
+// handleKBSetVector 为条目写入向量（POST /知识库/{id}/向量 {text}）
+func (s *Server) handleKBSetVector(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil || s.embedClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "向量未启用", "未配置 embedding")
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "id 必须是数字")
+		return
+	}
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "请求参数错误", "JSON 解析失败")
+		return
+	}
+	if req.Text == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "校验失败", "text 不能为空")
+		return
+	}
+	// 确认条目存在
+	if _, err := s.store.GetEntry(id); errors.Is(err, memory.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "资源不存在", "条目不存在")
+		return
+	}
+	vecs, err := s.embedClient.Embed(r.Context(), []string{req.Text})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "LLM_GATEWAY_ERROR", "embedding 服务异常", redact(err.Error()))
+		return
+	}
+	if len(vecs) == 0 {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", "embedding 返回空")
+		return
+	}
+	if err := s.store.SetVector(id, vecs[0]); err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "内部错误", redact(err.Error()))
+		return
+	}
+	s.logger.Info("写入条目向量", "id", id, "dim", len(vecs[0]))
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "状态": "向量已写入", "维度": len(vecs[0])})
 }
 
 // handleKBUpdate 更新条目

@@ -11,21 +11,27 @@ import (
 	"github.com/go-chi/httprate"
 
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/embed"
 	"github.com/Black0Bag/minibox/internal/memory"
 )
 
 // Server HTTP API 服务
 type Server struct {
-	cfg       *config.Config
-	logger    *slog.Logger
-	version   string
-	startTime time.Time
-	store     *memory.Store
+	cfg         *config.Config
+	logger      *slog.Logger
+	version     string
+	startTime   time.Time
+	store       *memory.Store
+	embedClient *embed.Client
 }
 
-// NewServer 创建 API 服务
+// NewServer 创建 API 服务（配置了 embedding 时自动启用向量检索客户端）
 func NewServer(cfg *config.Config, logger *slog.Logger, version string, store *memory.Store) *Server {
-	return &Server{cfg: cfg, logger: logger, version: version, startTime: time.Now(), store: store}
+	s := &Server{cfg: cfg, logger: logger, version: version, startTime: time.Now(), store: store}
+	if cfg.Embedding.Enabled && cfg.Embedding.BaseURL != "" {
+		s.embedClient = embed.New(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Model)
+	}
+	return s
 }
 
 // Router 构建路由（统一 /api/v1 前缀，N-13；RFC 7807 错误格式，N-09；限流，N-04）
@@ -66,6 +72,7 @@ func (s *Server) Router() http.Handler {
 				r.Get("/", s.handleKBList)
 				r.Get("/搜索", s.handleKBSearch)
 				r.Delete("/", s.handleKBClear)
+				r.Post("/{id}/向量", s.handleKBSetVector)
 				r.Get("/{id}", s.handleKBGet)
 				r.Put("/{id}", s.handleKBUpdate)
 				r.Delete("/{id}", s.handleKBDelete)
