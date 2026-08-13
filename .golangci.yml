@@ -1,0 +1,21 @@
+# golangci-lint 配置
+# minibox 后端静态检查规则
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - ineffassign
+    - revive
+    - misspell
+    - gocritic
+  disable:
+    - errcheck # 暂禁用，随 Phase 推进逐步启用
+
+issues:
+  exclude-use-default: false

@@ -1,0 +1,72 @@
+# minibox 后端 CI 流水线
+# 触发：push 到 opencode 分支 + PR
+name: CI
+
+on:
+  push:
+    branches: [opencode]
+  pull_request:
+    branches: [opencode]
+
+jobs:
+  test:
+    name: 测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: 下载依赖
+        run: go mod download
+
+      - name: 代码检查（go vet）
+        run: go vet ./...
+
+      - name: 测试（零 CGO，不启用 race）
+        run: go test -count=1 ./...
+
+      - name: 边界测试（模块隔离守护）
+        run: |
+          # 验证模块间不互相 import（模块化单体红线）
+          # 各 domain 模块不得 import 其他 domain 模块
+          go list -deps ./internal/domain/llm | grep -q "internal/domain/agent" && echo "❌ llm 依赖 agent（越界）" && exit 1 || echo "✅ llm 无越界依赖"
+          go list -deps ./internal/domain/agent | grep -q "internal/domain/tools" && echo "⚠️ agent 依赖 tools（评估）" || echo "✅ 依赖检查完成"
+
+  lint:
+    name: 静态检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  audit:
+    name: 依赖安全扫描
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
