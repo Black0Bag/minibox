@@ -67,14 +67,50 @@ type LoggingConfig struct {
 	MaxAgeDays int `koanf:"max_age_days"`
 }
 
-// LLMConfig 大模型配置（Phase 2 使用，先占位）。
+// LLMConfig 大模型配置（Phase 2）。
 type LLMConfig struct {
+	// Providers 供应商列表（每个含 endpoint/api_key/model 等）。
+	Providers []ProviderConfig `koanf:"providers"`
 	// DefaultProvider 默认供应商标识。
 	DefaultProvider string `koanf:"default_provider"`
 	// DefaultModel 默认模型。
 	DefaultModel string `koanf:"default_model"`
 	// Timeout LLM 调用超时。
 	Timeout time.Duration `koanf:"timeout"`
+	// MaxRetries 重试次数。
+	MaxRetries int `koanf:"max_retries"`
+}
+
+// ProviderConfig 单个 LLM 供应商配置。
+type ProviderConfig struct {
+	// Name 供应商标识（如 openai-compatible / deepseek / glm）。
+	Name string `koanf:"name"`
+	// BaseURL API 基础地址（OpenAI 兼容，如 https://api.deepseek.com/v1）。
+	BaseURL string `koanf:"base_url"`
+	// APIKeys 多 key 列表（key 池轮询，B4）。
+	APIKeys []string `koanf:"api_keys"`
+	// Models 该供应商可用的模型列表。
+	Models []ModelConfig `koanf:"models"`
+	// Timeout 单供应商超时（覆盖全局）。
+	Timeout time.Duration `koanf:"timeout"`
+}
+
+// ModelConfig 单个模型配置。
+type ModelConfig struct {
+	// ID 模型 ID（如 deepseek-chat）。
+	ID string `koanf:"id"`
+	// Enabled 是否启用。
+	Enabled bool `koanf:"enabled"`
+	// ContextLength 上下文长度（自动识别可覆盖）。
+	ContextLength int `koanf:"context_length"`
+	// MaxOutputTokens 单次输出上限。
+	MaxOutputTokens int `koanf:"max_output_tokens"`
+	// SupportsThinking 是否支持思考。
+	SupportsThinking bool `koanf:"supports_thinking"`
+	// RPM 每分钟请求限流。
+	RPM int `koanf:"rpm"`
+	// TPM 每分钟 token 限流。
+	TPM int `koanf:"tpm"`
 }
 
 // MemoryConfig 知识库/记忆配置（Phase 3 使用，先占位）。
@@ -115,6 +151,7 @@ func Default() Config {
 			DefaultProvider: "openai-compatible",
 			DefaultModel:    "",
 			Timeout:         120 * time.Second,
+			MaxRetries:      3,
 		},
 		Memory: MemoryConfig{
 			CompileBatchSize: 32,

@@ -1,0 +1,134 @@
+// Package llm 定义大模型供应商的统一接口。
+// 设计：单接口 + Normalizer 内部消化各家差异（agentsdk-go v2 实证）。
+// 不绑死任何模型，支持任意 OpenAI 兼容端点（deepseek/glm/nemotron/ollama 等）。
+package llm
+
+import "context"
+
+// Provider 是 LLM 供应商统一接口。
+// 实现：infrastructure/llm 下的 OpenAI 兼容客户端等。
+type Provider interface {
+	// Name 供应商标识。
+	Name() string
+
+	// Complete 非流式生成。
+	Complete(ctx context.Context, req Request) (*Response, error)
+
+	// Stream 流式生成，返回事件通道。
+	Stream(ctx context.Context, req Request) (<-chan StreamEvent, error)
+
+	// Models 获取供应商可用模型列表（能力识别，Q4A2）。
+	Models(ctx context.Context) ([]ModelInfo, error)
+}
+
+// ThinkingLevel 思考强度（5 档）。
+type ThinkingLevel string
+
+const (
+	ThinkingNone     ThinkingLevel = "none"
+	ThinkingLow      ThinkingLevel = "low"
+	ThinkingMedium   ThinkingLevel = "medium"
+	ThinkingHigh     ThinkingLevel = "high"
+	ThinkingXHigh    ThinkingLevel = "xhigh"
+)
+
+// MessageRole 消息角色。
+type MessageRole string
+
+const (
+	RoleSystem    MessageRole = "system"
+	RoleUser      MessageRole = "user"
+	RoleAssistant MessageRole = "assistant"
+	RoleTool      MessageRole = "tool"
+)
+
+// Message 对话消息。
+type Message struct {
+	Role       MessageRole `json:"role"`
+	Content    string      `json:"content"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Name       string      `json:"name,omitempty"`
+}
+
+// ToolDef 工具定义（供 LLM 调用）。
+type ToolDef struct {
+	Type        string       `json:"type"`
+	Function    FunctionDef  `json:"function"`
+}
+
+// FunctionDef 函数定义。
+type FunctionDef struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+// Request 生成请求。
+type Request struct {
+	Model       string
+	Messages    []Message
+	Thinking    ThinkingLevel
+	Tools       []ToolDef
+	MaxTokens   *int
+	Temperature *float64
+}
+
+// ToolCall 工具调用（模型请求执行的工具）。
+type ToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON 字符串
+}
+
+// Usage token 使用情况。
+type Usage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+// Response 生成响应（归一化后的统一结构）。
+type Response struct {
+	Content      string     `json:"content"`
+	Reasoning    string     `json:"reasoning"` // 思考过程（思考折叠卡用）
+	ToolCalls    []ToolCall `json:"tool_calls"`
+	Usage        Usage      `json:"usage"`
+	FinishReason string     `json:"finish_reason"`
+	Model        string     `json:"model"`
+}
+
+// StreamEventType 流式事件类型。
+type StreamEventType int
+
+const (
+	StreamTextDelta    StreamEventType = iota // 文本增量
+	StreamThinkingDelta                       // 思考增量
+	StreamToolCallDelta                       // 工具调用参数增量
+	StreamDone                                 // 流结束
+	StreamError                                // 错误
+)
+
+// StreamEvent 流式事件（归一化）。
+type StreamEvent struct {
+	Type       StreamEventType
+	Text       string     // TextDelta 时
+	Thinking   string     // ThinkingDelta 时
+	ToolCallID string     // ToolCallDelta 时
+	ToolCall   *ToolCall  // Done 时的完整工具调用
+	Usage      *Usage     // Done 时
+	FinishReason string   // Done 时
+	Err        error      // Error 时
+}
+
+// ModelInfo 模型能力信息（能力识别结果，Q4A2）。
+type ModelInfo struct {
+	ID                   string   `json:"id"`
+	ContextLength        int      `json:"context_length"`
+	MaxOutputTokens      int      `json:"max_output_tokens"`
+	SupportsTools        bool     `json:"supports_tools"`
+	SupportsThinking     bool     `json:"supports_thinking"`
+	SupportedEfforts     []string `json:"supported_efforts,omitempty"` // 支持的思考强度
+	SupportsVision       bool     `json:"supports_vision"`
+	SupportsStructuredOut bool    `json:"supports_structured_out"`
+	Provenance           string   `json:"provenance"` // api / probe / models_dev / manual
+}
