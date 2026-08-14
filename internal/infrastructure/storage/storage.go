@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite/vec" // sqlite-vec 向量扩展（原生支持，零 CGO）
 
 	"github.com/Black0Bag/minibox/internal/config"
 )

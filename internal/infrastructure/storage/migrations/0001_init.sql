@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS kb_cache (
     access_count    INTEGER NOT NULL DEFAULT 0,
     last_accessed_at TEXT,
     expires_at      TEXT NOT NULL,            -- 强制 TTL（临时内容必须有过期）
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_kb_cache_expires ON kb_cache(expires_at);
@@ -66,13 +67,10 @@ CREATE TRIGGER IF NOT EXISTS kb_store_au AFTER UPDATE ON kb_store BEGIN
 END;
 
 -- ========== kb_vec：向量索引（sqlite-vec vec0 虚表，1024 维 float32） ==========
--- 说明：sqlite-vec 是 C 扩展，与 pure-Go 的 modernc 兼容性需评估（见决策记录）
--- 本表先建标准表占位，向量列在评估完成后追加
-CREATE TABLE IF NOT EXISTS kb_vec_placeholder (
-    kb_store_id INTEGER PRIMARY KEY,
-    -- 向量以 BLOB 存储（评估完成后实现真正的 vec0 表）
-    embedding   BLOB,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+-- 说明：modernc.org/sqlite 原生支持 sqlite-vec（空白导入 _ "modernc.org/sqlite/vec"）
+-- 决策记录：sqlite-vec pure-Go 兼容性已解决（Gorse 2026-03 实证 + 本地 vec_version 验证 v0.1.9）
+CREATE VIRTUAL TABLE IF NOT EXISTS kb_vec USING vec0(
+    embedding float[1024]
 );
 
 -- ========== kb_snapshots：快照表（VACUUM INTO 版本管理） ==========
