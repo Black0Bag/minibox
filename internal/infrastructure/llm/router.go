@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,8 +18,6 @@ type ProviderEntry struct {
 	Provider llm.Provider
 	Name     string
 
-	mu      sync.Mutex
-	keyIdx  atomic.Int64 // key 池轮询游标
 	breaker *gobreaker.CircuitBreaker[any]
 }
 
@@ -43,7 +40,7 @@ func NewProviderEntry(p llm.Provider, name string) *ProviderEntry {
 }
 
 // Execute 带熔断执行。
-func (e *ProviderEntry) Execute(ctx context.Context, fn func() (any, error)) (any, error) {
+func (e *ProviderEntry) Execute(_ context.Context, fn func() (any, error)) (any, error) {
 	return e.breaker.Execute(func() (any, error) {
 		return fn()
 	})

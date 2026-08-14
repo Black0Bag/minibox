@@ -19,11 +19,11 @@ func TestComplete(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 读取请求体供断言
 		buf := make([]byte, r.ContentLength)
-		r.Body.Read(buf)
+		_, _ = r.Body.Read(buf)
 		gotBody = string(buf)
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"id":"chatcmpl-test",
 			"object":"chat.completion",
 			"choices":[{
@@ -97,9 +97,9 @@ func TestClassifyError(t *testing.T) {
 
 // TestModels 验证模型列表获取。
 func TestModels(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"object":"list",
 			"data":[
 				{"id":"deepseek-chat","object":"model","created":1700000000,"owned_by":"deepseek"},
@@ -124,12 +124,12 @@ func TestModels(t *testing.T) {
 
 // TestStream 验证流式解析。
 func TestStream(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n"))
-		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n"))
-		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考中\"}}]}\n\n"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考中\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 

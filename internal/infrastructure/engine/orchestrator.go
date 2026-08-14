@@ -174,7 +174,7 @@ func (o *Orchestrator) RunChain(ctx context.Context, tasks []subagent.Task) (sub
 }
 
 // RunBackground 后台异步执行（立即返回结果通道）。
-func (o *Orchestrator) RunBackground(ctx context.Context, t subagent.Task) (<-chan subagent.Result, error) {
+func (o *Orchestrator) RunBackground(_ context.Context, t subagent.Task) (<-chan subagent.Result, error) {
 	if _, ok := o.agents[t.AgentID]; !ok {
 		return nil, fmt.Errorf("subagent 未注册: %s", t.AgentID)
 	}

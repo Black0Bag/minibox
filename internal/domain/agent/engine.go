@@ -15,20 +15,28 @@ import (
 type State string
 
 const (
-	StatePlanning         State = "planning"          // 思考/计划（唯一花 token 决定下一步的状态）
-	StateActing           State = "acting"            // 执行一个工具（一次一个，副作用有记录）
-	StateAwaitingApproval State = "awaiting_approval" // 等人类批准（可停几天不花钱）
-	StateAwaitingInput    State = "awaiting_input"    // 等人类补充信息
-	StateDone             State = "done"
-	StateFailed           State = "failed"
+	// StatePlanning 思考/计划（唯一花 token 决定下一步的状态）。
+	StatePlanning State = "planning"
+	// StateActing 执行一个工具（一次一个，副作用有记录）。
+	StateActing State = "acting"
+	// StateAwaitingApproval 等人类批准（可停几天不花钱）。
+	StateAwaitingApproval State = "awaiting_approval"
+	// StateAwaitingInput 等人类补充信息。
+	StateAwaitingInput State = "awaiting_input"
+	// StateDone 完成。
+	StateDone State = "done"
+	// StateFailed 失败。
+	StateFailed State = "failed"
 )
 
 // Mode 运行模式（Plan/Build，F16）。
 type Mode string
 
 const (
-	ModePlan  Mode = "plan"  // 只分析+出计划，禁写工具
-	ModeBuild Mode = "build" // 用户确认后，写工具开放
+	// ModePlan 只分析+出计划，禁写工具。
+	ModePlan Mode = "plan"
+	// ModeBuild 用户确认后，写工具开放。
+	ModeBuild Mode = "build"
 )
 
 // Run Agent 一次运行（可持久化，每步落 todo_items/内存，崩溃续跑）。

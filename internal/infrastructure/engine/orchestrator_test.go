@@ -19,7 +19,7 @@ type mockSubAgent struct {
 
 func (m *mockSubAgent) ID() string { return m.id }
 
-func (m *mockSubAgent) Run(ctx context.Context, t subagent.Task) (subagent.Result, error) {
+func (m *mockSubAgent) Run(_ context.Context, t subagent.Task) (subagent.Result, error) {
 	m.ran = true
 	if m.delay > 0 {
 		time.Sleep(m.delay)

@@ -1,3 +1,5 @@
+// Package config 提供配置加载（koanf + YAML + 默认值）。
+// 设计：koanf 多 provider 合并，Go struct 作默认值来源（2026 选型不用 Viper）。
 package config
 
 import (

@@ -6,10 +6,14 @@ import "context"
 type JobStatus string
 
 const (
-	JobPending    JobStatus = "pending"
+	// JobPending 待处理。
+	JobPending JobStatus = "pending"
+	// JobProcessing 处理中。
 	JobProcessing JobStatus = "processing"
-	JobReady      JobStatus = "ready"
-	JobFailed     JobStatus = "failed"
+	// JobReady 就绪（已完成编译）。
+	JobReady JobStatus = "ready"
+	// JobFailed 失败。
+	JobFailed JobStatus = "failed"
 )
 
 // CompileJob 编译作业。

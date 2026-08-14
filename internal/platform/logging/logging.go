@@ -1,3 +1,4 @@
+// Package logging 提供 slog 日志封装（text/json 格式 + 文件轮转）。
 package logging
 
 import (
@@ -23,7 +24,7 @@ func New(cfg config.LoggingConfig) (*slog.Logger, error) {
 	opts := &slog.HandlerOptions{Level: level}
 
 	// 输出目标
-	var w io.Writer = os.Stdout
+	var w io.Writer
 	switch strings.ToLower(cfg.Output) {
 	case "stderr":
 		w = os.Stderr

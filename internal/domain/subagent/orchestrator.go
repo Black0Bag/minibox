@@ -37,10 +37,14 @@ type Agent interface {
 type Mode string
 
 const (
-	ModeSingle     Mode = "single"     // 一个 subagent 干一件活
-	ModeParallel   Mode = "parallel"   // 并行 fan-out
-	ModeChain      Mode = "chain"      // 串行，前一个结果给下一个
-	ModeBackground Mode = "background" // 异步，立即返回
+	// ModeSingle 一个 subagent 干一件活。
+	ModeSingle Mode = "single"
+	// ModeParallel 并行 fan-out。
+	ModeParallel Mode = "parallel"
+	// ModeChain 串行，前一个结果给下一个。
+	ModeChain Mode = "chain"
+	// ModeBackground 异步，立即返回。
+	ModeBackground Mode = "background"
 )
 
 // Config Orchestrator 配置。
@@ -79,8 +83,8 @@ type Orchestrator interface {
 	RunBackground(ctx context.Context, t Task) (<-chan Result, error)
 }
 
-// SubAgentConfig subagent 定义（独立人格 + 独立模型 + skill，QB10-QB13）。
-type SubAgentConfig struct {
+// AgentConfig subagent 定义（独立人格 + 独立模型 + skill，QB10-QB13）。
+type AgentConfig struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	SystemPrompt string   `json:"system_prompt"` // 独立人格
@@ -94,7 +98,7 @@ type SubAgentConfig struct {
 // 依赖注入窄接口（消费方定义）。
 type Factory interface {
 	// Build 根据配置构建 subagent。
-	Build(cfg SubAgentConfig) (Agent, error)
+	Build(cfg AgentConfig) (Agent, error)
 }
 
 // LLMProvider subagent 依赖的 LLM 接口（窄接口）。

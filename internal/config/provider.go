@@ -25,7 +25,7 @@ func (p structProvider) Read() (map[string]any, error) {
 }
 
 // Watch 不支持（无热更新）。
-func (p structProvider) Watch(cb func(event interface{}, err error)) error {
+func (p structProvider) Watch(_ func(event interface{}, err error)) error {
 	return nil
 }
 

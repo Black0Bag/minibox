@@ -18,7 +18,7 @@ func TestMigrate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开数据库失败: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// 验证 schema_meta 表存在
 	var version int
@@ -61,7 +61,7 @@ func TestKbStoreInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开数据库失败: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// 插入一条知识
 	_, err = db.Exec(

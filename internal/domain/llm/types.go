@@ -22,24 +22,34 @@ type Provider interface {
 }
 
 // ThinkingLevel 思考强度（5 档）。
+// ThinkingLevel 思考强度（5 档）。
 type ThinkingLevel string
 
 const (
-	ThinkingNone     ThinkingLevel = "none"
-	ThinkingLow      ThinkingLevel = "low"
-	ThinkingMedium   ThinkingLevel = "medium"
-	ThinkingHigh     ThinkingLevel = "high"
-	ThinkingXHigh    ThinkingLevel = "xhigh"
+	// ThinkingNone 不思考。
+	ThinkingNone ThinkingLevel = "none"
+	// ThinkingLow 低强度思考。
+	ThinkingLow ThinkingLevel = "low"
+	// ThinkingMedium 中强度思考。
+	ThinkingMedium ThinkingLevel = "medium"
+	// ThinkingHigh 高强度思考。
+	ThinkingHigh ThinkingLevel = "high"
+	// ThinkingXHigh 极强思考。
+	ThinkingXHigh ThinkingLevel = "xhigh"
 )
 
 // MessageRole 消息角色。
 type MessageRole string
 
 const (
-	RoleSystem    MessageRole = "system"
-	RoleUser      MessageRole = "user"
+	// RoleSystem 系统提示。
+	RoleSystem MessageRole = "system"
+	// RoleUser 用户输入。
+	RoleUser MessageRole = "user"
+	// RoleAssistant 助手回复。
 	RoleAssistant MessageRole = "assistant"
-	RoleTool      MessageRole = "tool"
+	// RoleTool 工具结果。
+	RoleTool MessageRole = "tool"
 )
 
 // Message 对话消息。
@@ -101,11 +111,16 @@ type Response struct {
 type StreamEventType int
 
 const (
-	StreamTextDelta    StreamEventType = iota // 文本增量
-	StreamThinkingDelta                       // 思考增量
-	StreamToolCallDelta                       // 工具调用参数增量
-	StreamDone                                 // 流结束
-	StreamError                                // 错误
+	// StreamTextDelta 文本增量。
+	StreamTextDelta StreamEventType = iota
+	// StreamThinkingDelta 思考增量。
+	StreamThinkingDelta
+	// StreamToolCallDelta 工具调用参数增量。
+	StreamToolCallDelta
+	// StreamDone 流结束。
+	StreamDone
+	// StreamError 错误。
+	StreamError
 )
 
 // StreamEvent 流式事件（归一化）。

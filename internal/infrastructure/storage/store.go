@@ -67,7 +67,7 @@ func (s *SQLiteStore) searchFTS(ctx context.Context, table string, q memory.Sear
 	if err != nil {
 		return nil, fmt.Errorf("FTS5 检索失败: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var hits []memory.Hit
 	for rows.Next() {
@@ -101,7 +101,7 @@ func (s *SQLiteStore) searchLike(ctx context.Context, table string, q memory.Sea
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var hits []memory.Hit
 	for rows.Next() {
@@ -155,7 +155,7 @@ func (s *SQLiteStore) List(ctx context.Context, tier memory.Tier, offset, limit 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var entries []memory.Entry
 	for rows.Next() {

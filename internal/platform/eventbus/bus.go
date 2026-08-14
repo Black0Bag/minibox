@@ -12,10 +12,9 @@ import (
 // Bus 是类型安全的事件总线。
 // T 是事件类型，订阅者收到 T 类型的值。
 type Bus[T any] struct {
-	mu      sync.RWMutex
-	subs    []Subscriber[T]
-	logger  *slog.Logger
-	started bool
+	mu     sync.RWMutex
+	subs   []Subscriber[T]
+	logger *slog.Logger
 }
 
 // Subscriber 订阅者回调。

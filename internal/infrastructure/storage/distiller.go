@@ -38,7 +38,7 @@ func (d *SQLiteDistiller) Distill(ctx context.Context, opts memory.DistillOption
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// 先收集结果（读循环内不能写同一连接，否则单写者死锁）
 	type candidate struct {
@@ -57,7 +57,7 @@ func (d *SQLiteDistiller) Distill(ctx context.Context, opts memory.DistillOption
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows.Close() // 释放读连接
+	_ = rows.Close() // 释放读连接
 
 	// 再写偏好（读循环结束后）
 	extracted := 0
@@ -94,7 +94,7 @@ func (d *SQLiteDistiller) ListPreferences(ctx context.Context, limit int) ([]mem
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var prefs []memory.Preference
 	for rows.Next() {

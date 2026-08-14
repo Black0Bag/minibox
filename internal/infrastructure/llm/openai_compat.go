@@ -208,7 +208,7 @@ func (c *OpenAICompat) do(ctx context.Context, path string, body []byte) ([]byte
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

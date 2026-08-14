@@ -13,20 +13,20 @@ type mockStore struct {
 	hits []memory.Hit
 }
 
-func (m *mockStore) Search(ctx context.Context, q memory.SearchQuery) ([]memory.Hit, error) {
+func (m *mockStore) Search(_ context.Context, _ memory.SearchQuery) ([]memory.Hit, error) {
 	return m.hits, nil
 }
-func (m *mockStore) Get(ctx context.Context, id int64, tier memory.Tier) (*memory.Entry, error) {
+func (m *mockStore) Get(_ context.Context, _ int64, _ memory.Tier) (*memory.Entry, error) {
 	return nil, nil
 }
-func (m *mockStore) List(ctx context.Context, tier memory.Tier, offset, limit int) ([]memory.Entry, error) {
+func (m *mockStore) List(_ context.Context, _ memory.Tier, _, _ int) ([]memory.Entry, error) {
 	return nil, nil
 }
-func (m *mockStore) Upsert(ctx context.Context, e memory.Entry) error { return nil }
-func (m *mockStore) PutCache(ctx context.Context, e memory.Entry, ttlSeconds int64) error {
+func (m *mockStore) Upsert(_ context.Context, _ memory.Entry) error { return nil }
+func (m *mockStore) PutCache(_ context.Context, _ memory.Entry, _ int64) error {
 	return nil
 }
-func (m *mockStore) Delete(ctx context.Context, id int64, tier memory.Tier) error { return nil }
+func (m *mockStore) Delete(_ context.Context, _ int64, _ memory.Tier) error { return nil }
 
 var _ memory.Store = (*mockStore)(nil)
 

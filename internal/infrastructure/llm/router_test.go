@@ -18,7 +18,7 @@ type fakeProvider struct {
 }
 
 func (f *fakeProvider) Name() string { return f.name }
-func (f *fakeProvider) Complete(ctx context.Context, req domainllm.Request) (*domainllm.Response, error) {
+func (f *fakeProvider) Complete(_ context.Context, _ domainllm.Request) (*domainllm.Response, error) {
 	f.callCount++
 	if f.failCount > 0 {
 		f.failCount--
@@ -26,10 +26,10 @@ func (f *fakeProvider) Complete(ctx context.Context, req domainllm.Request) (*do
 	}
 	return &domainllm.Response{Content: "from-" + f.name}, nil
 }
-func (f *fakeProvider) Stream(ctx context.Context, req domainllm.Request) (<-chan domainllm.StreamEvent, error) {
+func (f *fakeProvider) Stream(_ context.Context, _ domainllm.Request) (<-chan domainllm.StreamEvent, error) {
 	return nil, errors.New("stream not mocked")
 }
-func (f *fakeProvider) Models(ctx context.Context) ([]domainllm.ModelInfo, error) {
+func (f *fakeProvider) Models(_ context.Context) ([]domainllm.ModelInfo, error) {
 	return nil, nil
 }
 

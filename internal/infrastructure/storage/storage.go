@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite"     // 注册 sqlite 驱动（database/sql）
 	_ "modernc.org/sqlite/vec" // sqlite-vec 向量扩展（原生支持，零 CGO）
 
 	"github.com/Black0Bag/minibox/internal/config"
@@ -39,14 +39,14 @@ func Open(cfg config.DatabaseConfig) (*sql.DB, error) {
 
 	// 健康检查
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("数据库连通性检查失败: %w", err)
 	}
 
 	// 应用迁移
 	migrator := NewMigrator(db)
 	if err := migrator.Migrate(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 

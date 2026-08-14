@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"testing"
 
@@ -27,10 +28,10 @@ func TestHandlerLevel(t *testing.T) {
 	// 验证 Info 级能通过 Enabled 检查
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
-	if !h.Enabled(nil, slog.LevelInfo) {
+	if !h.Enabled(context.TODO(), slog.LevelInfo) {
 		t.Error("Info 级应被启用")
 	}
-	if h.Enabled(nil, slog.LevelDebug) {
+	if h.Enabled(context.TODO(), slog.LevelDebug) {
 		t.Error("Debug 级应被禁用（默认 Info）")
 	}
 }

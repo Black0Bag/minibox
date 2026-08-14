@@ -50,7 +50,7 @@ func (c *OpenAICompat) Stream(ctx context.Context, req llm.Request) (<-chan llm.
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		respBody, _ := readAllLimited(resp.Body)
 		return nil, llm.ClassifyError(resp.StatusCode, string(respBody))
 	}
@@ -61,8 +61,8 @@ func (c *OpenAICompat) Stream(ctx context.Context, req llm.Request) (<-chan llm.
 }
 
 // parseStream 解析 SSE 流。
-func (c *OpenAICompat) parseStream(ctx context.Context, resp *http.Response, events chan<- llm.StreamEvent) {
-	defer resp.Body.Close()
+func (c *OpenAICompat) parseStream(_ context.Context, resp *http.Response, events chan<- llm.StreamEvent) {
+	defer func() { _ = resp.Body.Close() }()
 	defer close(events)
 
 	scanner := bufio.NewScanner(resp.Body)

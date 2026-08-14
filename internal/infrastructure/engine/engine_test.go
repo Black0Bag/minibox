@@ -16,7 +16,7 @@ type mockLLM struct {
 
 func (m *mockLLM) Name() string { return "mock" }
 
-func (m *mockLLM) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+func (m *mockLLM) Complete(_ context.Context, _ llm.Request) (*llm.Response, error) {
 	if m.calls < len(m.responses) {
 		resp := m.responses[m.calls]
 		m.calls++
@@ -27,14 +27,14 @@ func (m *mockLLM) Complete(ctx context.Context, req llm.Request) (*llm.Response,
 	return &llm.Response{Content: "最终答案", Usage: llm.Usage{TotalTokens: 10}}, nil
 }
 
-func (m *mockLLM) Stream(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, error) {
+func (m *mockLLM) Stream(_ context.Context, _ llm.Request) (<-chan llm.StreamEvent, error) {
 	ch := make(chan llm.StreamEvent, 1)
 	ch <- llm.StreamEvent{Type: llm.StreamDone}
 	close(ch)
 	return ch, nil
 }
 
-func (m *mockLLM) Models(ctx context.Context) ([]llm.ModelInfo, error) {
+func (m *mockLLM) Models(_ context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
 }
 
@@ -46,12 +46,12 @@ type mockTools struct {
 	approve  map[string]bool
 }
 
-func (m *mockTools) Execute(ctx context.Context, call llm.ToolCall) (string, error) {
+func (m *mockTools) Execute(_ context.Context, call llm.ToolCall) (string, error) {
 	m.executed = append(m.executed, call.Name)
 	return "工具执行成功", nil
 }
 
-func (m *mockTools) RequiresApproval(ctx context.Context, call llm.ToolCall) bool {
+func (m *mockTools) RequiresApproval(_ context.Context, call llm.ToolCall) bool {
 	if m.approve == nil {
 		return false
 	}
@@ -63,9 +63,9 @@ var _ agent.ToolExecutor = (*mockTools)(nil)
 // testLogger 测试 logger（静默）。
 type testLogger struct{}
 
-func (testLogger) Info(msg string, args ...any)  {}
-func (testLogger) Warn(msg string, args ...any)  {}
-func (testLogger) Error(msg string, args ...any) {}
+func (testLogger) Info(_ string, _ ...any)  {}
+func (testLogger) Warn(_ string, _ ...any)  {}
+func (testLogger) Error(_ string, _ ...any) {}
 
 // TestEngineSimpleAnswer 验证简单问答（无工具调用）。
 func TestEngineSimpleAnswer(t *testing.T) {

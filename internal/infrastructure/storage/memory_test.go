@@ -22,7 +22,7 @@ func newTestStore(t *testing.T) (*SQLiteStore, *SQLiteCompiler, *SQLiteDistiller
 	if err != nil {
 		t.Fatalf("打开数据库失败: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	tokenizer, err := NewJiebaTokenizer()
 	if err != nil {
@@ -167,15 +167,19 @@ func TestDistiller(t *testing.T) {
 	ctx := context.Background()
 
 	// 写入高频条目
-	store.Upsert(ctx, memory.Entry{
+	if err := store.Upsert(ctx, memory.Entry{
 		Content:    "用户偏好使用深色主题",
 		SourceHash: "pref-1",
 		Importance: 0.9,
-	})
+	}); err != nil {
+		t.Fatalf("Upsert 失败: %v", err)
+	}
 
 	// 模拟高频访问（直接 update access_count）
 	db := distiller.db
-	db.Exec("UPDATE kb_store SET access_count = 5 WHERE source_hash = 'pref-1'")
+	if _, err := db.Exec("UPDATE kb_store SET access_count = 5 WHERE source_hash = 'pref-1'"); err != nil {
+		t.Fatalf("update access_count 失败: %v", err)
+	}
 
 	result, err := distiller.Distill(ctx, memory.DistillOptions{
 		MinEvidence:         1,

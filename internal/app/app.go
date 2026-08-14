@@ -18,7 +18,7 @@ type App struct {
 
 // New 创建 App，装配所有依赖。
 // 目前是骨架：仅装配配置和日志，业务模块在 Phase 1+ 逐块注入。
-func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
+func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
 	a := &App{
 		cfg:    cfg,
 		logger: logger,

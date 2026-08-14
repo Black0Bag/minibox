@@ -116,7 +116,7 @@ func (m *Migrator) apply(mig migration) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// 执行迁移 SQL
 	if _, err := tx.Exec(mig.sql); err != nil {

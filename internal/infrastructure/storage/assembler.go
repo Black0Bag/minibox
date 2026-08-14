@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/Black0Bag/minibox/internal/domain/memory"
@@ -92,12 +91,5 @@ func estimateTokens(s string) int {
 		}
 		return r == ' ' || r == '\n' || r == '\t' || r == '，' || r == '。'
 	})
-	return cjk + len(words)
-}
-
-// sortHitsByScore 按分数降序。
-func sortHitsByScore(hits []memory.Hit) {
-	sort.Slice(hits, func(i, j int) bool {
-		return hits[i].Score > hits[j].Score
-	})
+return cjk + len(words)
 }

@@ -22,7 +22,6 @@ type UIEvent struct {
 // 依据：chonk-ai 统一事件流 + go-llm-router 推理归一化。
 type Normalizer struct {
 	messageID string
-	toolName  string // 当前工具名（工具参数分片时累积）
 }
 
 // NewNormalizer 创建归一化器。

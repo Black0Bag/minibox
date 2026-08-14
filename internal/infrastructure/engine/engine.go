@@ -57,7 +57,7 @@ func (e *Engine) SetMemoryGate(g *MemoryGate) {
 }
 
 // Start 启动一次运行。
-func (e *Engine) Start(ctx context.Context, req agent.Request) (*agent.Run, error) {
+func (e *Engine) Start(_ context.Context, req agent.Request) (*agent.Run, error) {
 	run := &agent.Run{
 		ID:        newRunID(),
 		SessionID: req.SessionID,
@@ -227,7 +227,7 @@ func (e *Engine) stepActing(ctx context.Context, run *agent.Run) (*agent.Run, er
 }
 
 // Approve 人类批准。
-func (e *Engine) Approve(ctx context.Context, runID string, decision bool) (*agent.Run, error) {
+func (e *Engine) Approve(_ context.Context, runID string, decision bool) (*agent.Run, error) {
 	e.mu.Lock()
 	run, ok := e.runs[runID]
 	e.mu.Unlock()
@@ -255,7 +255,7 @@ func (e *Engine) Approve(ctx context.Context, runID string, decision bool) (*age
 }
 
 // Steer 中途改方向。
-func (e *Engine) Steer(ctx context.Context, runID, msg string) error {
+func (e *Engine) Steer(_ context.Context, runID, msg string) error {
 	e.mu.Lock()
 	run, ok := e.runs[runID]
 	e.mu.Unlock()
@@ -269,7 +269,7 @@ func (e *Engine) Steer(ctx context.Context, runID, msg string) error {
 }
 
 // Abort 取消。
-func (e *Engine) Abort(ctx context.Context, runID string) error {
+func (e *Engine) Abort(_ context.Context, runID string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, ok := e.runs[runID]; !ok {
@@ -280,7 +280,7 @@ func (e *Engine) Abort(ctx context.Context, runID string) error {
 }
 
 // Resume 崩溃后续跑（内存实现：返回当前状态）。
-func (e *Engine) Resume(ctx context.Context, runID string) (*agent.Run, error) {
+func (e *Engine) Resume(_ context.Context, runID string) (*agent.Run, error) {
 	e.mu.RLock()
 	run, ok := e.runs[runID]
 	e.mu.RUnlock()

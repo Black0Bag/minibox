@@ -14,8 +14,6 @@ linters:
     - revive
     - misspell
     - gocritic
-  disable:
-    - errcheck # 暂禁用，随 Phase 推进逐步启用
 
 issues:
   exclude-use-default: false

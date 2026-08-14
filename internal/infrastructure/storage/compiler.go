@@ -33,7 +33,7 @@ func NewCompiler(db *sql.DB, store memory.Store) *SQLiteCompiler {
 
 // Compile 提交编译作业（异步）。
 // 当前骨架：立即标记 PENDING，后台 goroutine 处理（Phase 3 后续接 LLM 提炼+embedding）。
-func (c *SQLiteCompiler) Compile(ctx context.Context, source string, opts memory.CompileOptions) (*memory.CompileJob, error) {
+func (c *SQLiteCompiler) Compile(_ context.Context, source string, opts memory.CompileOptions) (*memory.CompileJob, error) {
 	job := &memory.CompileJob{
 		ID:        newJobID(),
 		Source:    source,
@@ -54,7 +54,8 @@ func (c *SQLiteCompiler) Compile(ctx context.Context, source string, opts memory
 
 // process 后台处理编译作业（状态机推进）。
 // 当前：直接把 source 当文本写入 kb_store（占位），后续接 LLM 提炼+切块+embedding。
-func (c *SQLiteCompiler) process(jobID, source string, opts memory.CompileOptions) {
+// opts 当前未用，LLM 提炼阶段接入（Phase 3 后续）。
+func (c *SQLiteCompiler) process(jobID, source string, _ memory.CompileOptions) {
 	c.updateStatus(jobID, memory.JobProcessing, 0, 1, "")
 
 	// 骨架：源文本直接入库（Phase 3 后续替换为完整管道）
@@ -73,7 +74,7 @@ func (c *SQLiteCompiler) process(jobID, source string, opts memory.CompileOption
 }
 
 // GetJob 查询作业状态。
-func (c *SQLiteCompiler) GetJob(ctx context.Context, id string) (*memory.CompileJob, error) {
+func (c *SQLiteCompiler) GetJob(_ context.Context, id string) (*memory.CompileJob, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	job, ok := c.jobs[id]
@@ -86,7 +87,7 @@ func (c *SQLiteCompiler) GetJob(ctx context.Context, id string) (*memory.Compile
 }
 
 // ListJobs 列出作业。
-func (c *SQLiteCompiler) ListJobs(ctx context.Context, limit int) ([]memory.CompileJob, error) {
+func (c *SQLiteCompiler) ListJobs(_ context.Context, limit int) ([]memory.CompileJob, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var jobs []memory.CompileJob
@@ -129,10 +130,13 @@ func (c *SQLiteCompiler) updateStatus(id string, status memory.JobStatus, progre
 	}
 }
 
-// newJobID 生成作业 ID。
+// newJobID 生成作业 ID（crypto/rand，抗碰撞）。
 func newJobID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand 失败极罕见；退回时间戳保证唯一
+		return fmt.Sprintf("job_%d", time.Now().UnixNano())
+	}
 	return "job_" + hex.EncodeToString(b)
 }
 
