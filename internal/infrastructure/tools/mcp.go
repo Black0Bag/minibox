@@ -21,10 +21,10 @@ import (
 
 // mcpRequest JSON-RPC 请求。
 type mcpRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int64       `json:"id"`
-	Method  string      `json:"method"`
-	Params  any         `json:"params,omitempty"`
+	JSONRPC string `json:"jsonrpc"`
+	ID      int64  `json:"id"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
 }
 
 // mcpResponse JSON-RPC 响应。
@@ -102,8 +102,14 @@ type MCPAdapter struct {
 }
 
 // NewMCPAdapter 启动 MCP 服务器子进程，完成初始化握手，返回适配器。
+// 子进程生命周期独立于调用方 ctx（用 context.WithoutCancel 派生，
+// 避免 ctx 取消时误杀子进程——golang-context 实证）。
+// ctx 仅用于初始化握手阶段的超时/取消控制。
 func NewMCPAdapter(ctx context.Context, name, command string, args []string) (*MCPAdapter, error) {
-	cmd := exec.CommandContext(ctx, command, args...)
+	// 子进程上下文：脱离调用方取消链，由 Close() 管理生命周期
+	procCtx := context.WithoutCancel(ctx)
+	// #nosec G204 -- MCP 服务器命令由配置指定，非用户输入；stdin/stdout 走 JSON-RPC
+	cmd := exec.CommandContext(procCtx, command, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("MCP %s 创建 stdin 管道失败: %w", name, err)
@@ -125,6 +131,8 @@ func NewMCPAdapter(ctx context.Context, name, command string, args []string) (*M
 		scanner: bufio.NewScanner(stdout),
 		nextID:  atomic.Int64{},
 	}
+	// MCP 工具结果可能超过 Scanner 默认 64KB 上限，扩大到 4MB（防长结果截断）
+	a.scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
 	// 初始化握手
 	if err := a.initialize(ctx); err != nil {
@@ -231,6 +239,8 @@ func (a *MCPAdapter) send(req mcpRequest) error {
 }
 
 // sendAndRecv 发送 JSON-RPC 请求并等待响应。
+// 并发安全：MCP stdio 是单管道请求/响应，整个读写用互斥锁串行化，
+// 否则多 goroutine 共用 bufio.Scanner 会数据竞争 + 响应错配（golang-concurrency）。
 func (a *MCPAdapter) sendAndRecv(ctx context.Context, req mcpRequest, result any) error {
 	line, err := json.Marshal(req)
 	if err != nil {
@@ -239,15 +249,14 @@ func (a *MCPAdapter) sendAndRecv(ctx context.Context, req mcpRequest, result any
 	line = append(line, '\n')
 
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.closed {
-		a.mu.Unlock()
 		return fmt.Errorf("MCP 服务器 %s 已关闭", a.name)
 	}
 	if _, err := a.stdin.Write(line); err != nil {
-		a.mu.Unlock()
 		return err
 	}
-	a.mu.Unlock()
 
 	// 读响应行（JSON-RPC 2.0 newline-delimited）
 	for {
@@ -320,14 +329,14 @@ type mcpTool struct {
 
 func (m *mcpTool) fullName() string { return m.server + "__" + m.remote }
 
-func (m *mcpTool) Name() string               { return m.fullName() }
+func (m *mcpTool) Name() string                { return m.fullName() }
 func (m *mcpTool) Description() string         { return m.desc }
 func (m *mcpTool) JSONSchema() json.RawMessage { return m.schema }
 func (m *mcpTool) Metadata() tools.Metadata {
 	return tools.Metadata{
-		OpenWorld:       true,
-		MaxResultSize:   1 << 20,
-		RiskTier:        "medium",
+		OpenWorld:        true,
+		MaxResultSize:    1 << 20,
+		RiskTier:         "medium",
 		RequiresApproval: false,
 	}
 }

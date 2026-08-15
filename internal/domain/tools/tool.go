@@ -12,14 +12,14 @@ import (
 
 // Metadata 工具元数据（权限系统看，tRPC-Agent 2026 实证）。
 type Metadata struct {
-	ReadOnly        bool   `json:"read_only"`        // 只读
-	Destructive     bool   `json:"destructive"`      // 破坏性（删/改）
-	ConcurrencySafe bool   `json:"concurrency_safe"` // 并发安全
-	SearchOrRead    bool   `json:"search_or_read"`   // 搜索/读取类
-	OpenWorld       bool   `json:"open_world"`       // 可联网/外部世界
-	MaxResultSize   int    `json:"max_result_size"`  // 输出上限（防烧爆上下文）
-	RiskTier        string `json:"risk_tier"`        // low/medium/high
-	RequiresApproval bool  `json:"requires_approval"` // 需人工批准
+	ReadOnly         bool   `json:"read_only"`         // 只读
+	Destructive      bool   `json:"destructive"`       // 破坏性（删/改）
+	ConcurrencySafe  bool   `json:"concurrency_safe"`  // 并发安全
+	SearchOrRead     bool   `json:"search_or_read"`    // 搜索/读取类
+	OpenWorld        bool   `json:"open_world"`        // 可联网/外部世界
+	MaxResultSize    int    `json:"max_result_size"`   // 输出上限（防烧爆上下文）
+	RiskTier         string `json:"risk_tier"`         // low/medium/high
+	RequiresApproval bool   `json:"requires_approval"` // 需人工批准
 }
 
 // Tool 工具接口。
@@ -150,16 +150,16 @@ func (e *DuplicateError) Error() string {
 // forbiddenNames 禁止工具表（ironclaw 2026 实证）。
 // 控制面操作不许作为直接工具，必须走宿主网关。
 var forbiddenNames = map[string]bool{
-	"install_packages":   true,
-	"install_package":    true,
-	"add_mcp_server":     true,
-	"remove_mcp_server":  true,
-	"self_edit":          true,
-	"edit_self":          true,
-	"edit_source":        true,
-	"set_persona":        true,
-	"set_permissions":    true,
-	"set_worldbook":      true,
+	"install_packages":  true,
+	"install_package":   true,
+	"add_mcp_server":    true,
+	"remove_mcp_server": true,
+	"self_edit":         true,
+	"edit_self":         true,
+	"edit_source":       true,
+	"set_persona":       true,
+	"set_permissions":   true,
+	"set_worldbook":     true,
 }
 
 // IsForbidden 判断工具名是否在禁止表。
@@ -180,7 +180,7 @@ func (e *ToolOutputTooLargeError) Error() string {
 
 // ToolPanicError 工具 Invoke 内部 panic（golang-safety 实证：recover 隔离，不炸宿主）。
 type ToolPanicError struct {
-	Name string
+	Name  string
 	Panic any
 }
 

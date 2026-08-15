@@ -192,6 +192,7 @@ func Load(path string) (Config, error) {
 }
 
 // WriteDefault 把默认配置写入 yaml 文件（首次启动自动生成配置用）。
+// 权限 0600：配置文件可能含 API key 等密钥，只允许本用户读写（N-05 实证）。
 func WriteDefault(path string) error {
 	cfg := Default()
 	k := koanf.New(".")
@@ -202,5 +203,5 @@ func WriteDefault(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, out, 0o644)
+	return os.WriteFile(path, out, 0o600)
 }

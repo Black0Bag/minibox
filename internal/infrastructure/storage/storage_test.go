@@ -25,15 +25,17 @@ func TestMigrate(t *testing.T) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("读取 user_version 失败: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("期望 user_version=1, 实际 %d", version)
+	// 期望 = 已嵌入迁移文件的最大版本号（动态，避免加迁移后忘记更新）
+	wantVersion := latestMigrationVersion(t)
+	if version != wantVersion {
+		t.Errorf("期望 user_version=%d, 实际 %d", wantVersion, version)
 	}
 
 	// 验证核心表存在
-	for _, table := range []string{"schema_meta", "kb_store", "kb_cache", "kb_fts", "kb_snapshots", "kb_preferences"} {
+	for _, table := range []string{"schema_meta", "kb_store", "kb_cache", "kb_fts", "kb_vec", "kb_snapshots", "kb_preferences"} {
 		var name string
 		err := db.QueryRow(
-			"SELECT name FROM sqlite_master WHERE type='table' AND name=?", table,
+			"SELECT name FROM sqlite_master WHERE type IN ('table','virtual') AND name=?", table,
 		).Scan(&name)
 		if err != nil {
 			t.Errorf("表 %s 不存在: %v", table, err)
@@ -48,6 +50,19 @@ func TestMigrate(t *testing.T) {
 	if err != nil {
 		t.Errorf("触发器 kb_store_ai 不存在: %v", err)
 	}
+}
+
+// latestMigrationVersion 返回已嵌入迁移文件的最大版本号。
+func latestMigrationVersion(t *testing.T) int {
+	t.Helper()
+	migs, err := (&Migrator{db: nil}).list()
+	if err != nil {
+		t.Fatalf("列出迁移失败: %v", err)
+	}
+	if len(migs) == 0 {
+		return 0
+	}
+	return migs[len(migs)-1].version
 }
 
 // TestKbStoreInsert 验证 kb_store 插入 + FTS5 自动同步。

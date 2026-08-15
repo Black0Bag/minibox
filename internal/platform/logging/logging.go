@@ -34,9 +34,9 @@ func New(cfg config.LoggingConfig) (*slog.Logger, error) {
 		// 文件输出 + lumberjack 轮转
 		w = &lumberjack.Logger{
 			Filename:   cfg.Output,
-			MaxSize:    cfg.MaxSizeMB,   // MB
-			MaxBackups: cfg.MaxBackups,  // 保留备份数
-			MaxAge:     cfg.MaxAgeDays,  // 保留天数
+			MaxSize:    cfg.MaxSizeMB,  // MB
+			MaxBackups: cfg.MaxBackups, // 保留备份数
+			MaxAge:     cfg.MaxAgeDays, // 保留天数
 			LocalTime:  true,
 			Compress:   true,
 		}

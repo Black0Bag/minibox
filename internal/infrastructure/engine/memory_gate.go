@@ -15,10 +15,10 @@ import (
 // MemoryGate 强制记忆门。
 // 在 LLM 调用前强制检索知识库，把命中结果注入 system 消息。
 type MemoryGate struct {
-	store       memory.Store
-	enabled     bool   // 是否启用（默认开，记忆中心化红线）
-	minScore    float64 // 低于此分数视为"知识不足"，允许放弃
-	topK        int
+	store    memory.Store
+	enabled  bool    // 是否启用（默认开，记忆中心化红线）
+	minScore float64 // 低于此分数视为"知识不足"，允许放弃
+	topK     int
 }
 
 // NewMemoryGate 创建记忆门。
@@ -45,8 +45,8 @@ func (g *MemoryGate) Inject(ctx context.Context, req llm.Request) ([]llm.Message
 	}
 
 	hits, err := g.store.Search(ctx, memory.SearchQuery{
-		Text:  query,
-		TopK:  g.topK,
+		Text: query,
+		TopK: g.topK,
 	})
 	if err != nil {
 		// 检索失败不阻断（降级：无记忆继续）

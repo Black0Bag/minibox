@@ -69,6 +69,7 @@ func (v *PathValidator) ReadFile(path string) ([]byte, error) {
 	if err := v.Validate(path); err != nil {
 		return nil, err
 	}
+	// #nosec G304 -- path 已通过 PathValidator.Validate 沙箱校验（上一行）
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败 %s: %w", path, err)
@@ -81,7 +82,7 @@ func (v *PathValidator) WriteFile(path string, data []byte, perm os.FileMode) er
 	if err := v.Validate(path); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("创建目录失败 %s: %w", filepath.Dir(path), err)
 	}
 	if err := os.WriteFile(path, data, perm); err != nil {

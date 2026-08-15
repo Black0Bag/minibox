@@ -23,7 +23,9 @@ func NewSQLiteStore(db *sql.DB, tokenizer memory.Tokenizer) *SQLiteStore {
 	return &SQLiteStore{db: db, tokenizer: tokenizer}
 }
 
-// Search 混合检索（三级降级：Hybrid→FTS5→LIKE）。
+// Search 混合检索（三级降级：Hybrid→FTS5→LIKE，mika ADR-003 实证）。
+// 有 QueryVector → Hybrid（vec KNN + FTS5 + RRF 融合）；
+// 无向量 → FTS5 → LIKE 降级。
 func (s *SQLiteStore) Search(ctx context.Context, q memory.SearchQuery) ([]memory.Hit, error) {
 	if q.TopK == 0 {
 		q.TopK = 10
@@ -33,13 +35,27 @@ func (s *SQLiteStore) Search(ctx context.Context, q memory.SearchQuery) ([]memor
 	}
 	table := tierTable(q.Tier)
 
-	// 1. 尝试 FTS5 关键词检索
+	// 1. 有查询向量 → Hybrid（向量 + FTS5 融合）
+	if len(q.QueryVector) > 0 {
+		hits, err := s.hybridSearch(ctx, q.Tier, q)
+		if err != nil {
+			// Hybrid 失败（如 vec0 不可用）→ 降级 FTS5
+			ftsHits, ftsErr := s.searchFTS(ctx, table, q)
+			if ftsErr == nil && len(ftsHits) > 0 {
+				return ftsHits, nil
+			}
+			return nil, err
+		}
+		return hits, nil
+	}
+
+	// 2. 无向量 → FTS5
 	hits, err := s.searchFTS(ctx, table, q)
 	if err != nil || len(hits) > 0 {
 		return hits, err
 	}
 
-	// 2. 降级到 LIKE（FTS5 无结果或不可用）
+	// 3. 降级到 LIKE（FTS5 无结果或不可用）
 	return s.searchLike(ctx, table, q)
 }
 
@@ -53,6 +69,7 @@ func (s *SQLiteStore) searchFTS(ctx context.Context, table string, q memory.Sear
 		return nil, err
 	}
 
+	// #nosec G201 -- table 来自 tierTable() 白名单（仅 kb_store/kb_cache），非用户输入
 	query := fmt.Sprintf(`
 		SELECT %s.id, %s.content, %s.source, %s.tags, %s.source_hash,
 		       %s.importance, %s.access_count, %s.created_at,
@@ -89,6 +106,7 @@ func (s *SQLiteStore) searchFTS(ctx context.Context, table string, q memory.Sear
 
 // searchLike 降级：LIKE 子串匹配（索引未就绪/embedding 不可用）。
 func (s *SQLiteStore) searchLike(ctx context.Context, table string, q memory.SearchQuery) ([]memory.Hit, error) {
+	// #nosec G201 -- table 来自 tierTable() 白名单（仅 kb_store/kb_cache），非用户输入
 	query := fmt.Sprintf(`
 		SELECT id, content, source, tags, source_hash, importance, access_count, created_at
 		FROM %s
@@ -122,6 +140,7 @@ func (s *SQLiteStore) searchLike(ctx context.Context, table string, q memory.Sea
 // Get 获取单条。
 func (s *SQLiteStore) Get(ctx context.Context, id int64, tier memory.Tier) (*memory.Entry, error) {
 	table := tierTable(tier)
+	// #nosec G201 -- table 来自 tierTable() 白名单（仅 kb_store/kb_cache），非用户输入
 	query := fmt.Sprintf(`
 		SELECT id, content, source, tags, source_hash, importance, access_count, created_at, updated_at
 		FROM %s WHERE id = ?`, table)
@@ -147,6 +166,7 @@ func (s *SQLiteStore) Get(ctx context.Context, id int64, tier memory.Tier) (*mem
 // List 分页列出。
 func (s *SQLiteStore) List(ctx context.Context, tier memory.Tier, offset, limit int) ([]memory.Entry, error) {
 	table := tierTable(tier)
+	// #nosec G201 -- table 来自 tierTable() 白名单（仅 kb_store/kb_cache），非用户输入
 	query := fmt.Sprintf(`
 		SELECT id, content, source, tags, source_hash, importance, access_count, created_at, updated_at
 		FROM %s ORDER BY created_at DESC LIMIT ? OFFSET ?`, table)
@@ -213,6 +233,7 @@ func (s *SQLiteStore) PutCache(ctx context.Context, e memory.Entry, ttlSeconds i
 // Delete 删除。
 func (s *SQLiteStore) Delete(ctx context.Context, id int64, tier memory.Tier) error {
 	table := tierTable(tier)
+	// #nosec G201 -- table 来自 tierTable() 白名单（仅 kb_store/kb_cache），非用户输入
 	_, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE id = ?", table), id)
 	return err
 }
@@ -223,6 +244,15 @@ func tierTable(tier memory.Tier) string {
 		return "kb_cache"
 	}
 	return "kb_store"
+}
+
+// GetIDByHash 按 source_hash 查条目 ID（幂等摄入/向量关联用）。
+// 未找到返回 sql.ErrNoRows。
+func (s *SQLiteStore) GetIDByHash(ctx context.Context, sourceHash string) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT id FROM kb_store WHERE source_hash = ?", sourceHash).Scan(&id)
+	return id, err
 }
 
 // parseTags 解析 JSON 数组 tags。

@@ -18,14 +18,14 @@ const (
 
 // CompileJob 编译作业。
 type CompileJob struct {
-	ID         string    `json:"id"`
-	Source     string    `json:"source"`  // url / text / image
-	Status     JobStatus `json:"status"`
-	Progress   int       `json:"progress"`    // 已完成 chunk 数
-	Total      int       `json:"total"`       // 总 chunk 数
-	Error      string    `json:"error,omitempty"`
-	CreatedAt  string    `json:"created_at"`
-	UpdatedAt  string    `json:"updated_at"`
+	ID        string    `json:"id"`
+	Source    string    `json:"source"` // url / text / image
+	Status    JobStatus `json:"status"`
+	Progress  int       `json:"progress"` // 已完成 chunk 数
+	Total     int       `json:"total"`    // 总 chunk 数
+	Error     string    `json:"error,omitempty"`
+	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
 }
 
 // CompileOptions 编译选项。
@@ -82,20 +82,20 @@ type Distiller interface {
 
 // Preference 偏好条目。
 type Preference struct {
-	Key          string  `json:"key"`
-	Value        string  `json:"value"`
-	Probability  float64 `json:"probability"`
-	EvidenceCnt  int     `json:"evidence_count"`
-	LastHitAt    string  `json:"last_hit_at,omitempty"`
+	Key         string  `json:"key"`
+	Value       string  `json:"value"`
+	Probability float64 `json:"probability"`
+	EvidenceCnt int     `json:"evidence_count"`
+	LastHitAt   string  `json:"last_hit_at,omitempty"`
 }
 
 // Projection 上下文组装结果（投影层）。
 // 稳定前缀（缓存命中）+ 动态检索 + 会话摘要。
 type Projection struct {
-	Pinned    []string  `json:"pinned"`     // 稳定前缀：system prompt + 角色卡 + 世界书
-	Retrieved []Hit     `json:"retrieved"`  // 动态检索结果（放稳定内容后）
-	Recent    []string  `json:"recent"`     // 最近对话
-	Summary   string    `json:"summary"`    // 会话摘要
+	Pinned    []string   `json:"pinned"`    // 稳定前缀：system prompt + 角色卡 + 世界书
+	Retrieved []Hit      `json:"retrieved"` // 动态检索结果（放稳定内容后）
+	Recent    []string   `json:"recent"`    // 最近对话
+	Summary   string     `json:"summary"`   // 会话摘要
 	Usage     TokenUsage `json:"usage"`     // token 预算使用
 }
 

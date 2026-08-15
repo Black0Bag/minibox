@@ -11,10 +11,10 @@ import (
 
 // mockSubAgent 测试用假 subagent。
 type mockSubAgent struct {
-	id      string
-	fail    bool
-	delay   time.Duration
-	ran     bool
+	id    string
+	fail  bool
+	delay time.Duration
+	ran   bool
 }
 
 func (m *mockSubAgent) ID() string { return m.id }

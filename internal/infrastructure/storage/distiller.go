@@ -42,9 +42,9 @@ func (d *SQLiteDistiller) Distill(ctx context.Context, opts memory.DistillOption
 
 	// 先收集结果（读循环内不能写同一连接，否则单写者死锁）
 	type candidate struct {
-		content      string
-		importance   float64
-		accessCount  int
+		content     string
+		importance  float64
+		accessCount int
 	}
 	var candidates []candidate
 	for rows.Next() {

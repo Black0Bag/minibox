@@ -16,10 +16,10 @@ import (
 // 状态机：PENDING→PROCESSING→READY/FAILED，单调不后退（SmartSearch 实证）。
 // 当前骨架：异步提交 + 状态查询 + 死信重试框架。LLM 提炼/embedding 在 Phase 3 后续接入。
 type SQLiteCompiler struct {
-	db        *sql.DB
-	store     memory.Store
-	mu        sync.Mutex
-	jobs      map[string]*memory.CompileJob // 内存作业表（暂用，Phase 3 落表）
+	db    *sql.DB
+	store memory.Store
+	mu    sync.Mutex
+	jobs  map[string]*memory.CompileJob // 内存作业表（暂用，Phase 3 落表）
 }
 
 // NewCompiler 创建编译管道。
@@ -33,7 +33,8 @@ func NewCompiler(db *sql.DB, store memory.Store) *SQLiteCompiler {
 
 // Compile 提交编译作业（异步）。
 // 当前骨架：立即标记 PENDING，后台 goroutine 处理（Phase 3 后续接 LLM 提炼+embedding）。
-func (c *SQLiteCompiler) Compile(_ context.Context, source string, opts memory.CompileOptions) (*memory.CompileJob, error) {
+// 后台上下文用 context.WithoutCancel 派生：编译作业必须脱离请求生命周期（golang-context）。
+func (c *SQLiteCompiler) Compile(ctx context.Context, source string, opts memory.CompileOptions) (*memory.CompileJob, error) {
 	job := &memory.CompileJob{
 		ID:        newJobID(),
 		Source:    source,
@@ -46,8 +47,9 @@ func (c *SQLiteCompiler) Compile(_ context.Context, source string, opts memory.C
 	c.jobs[job.ID] = job
 	c.mu.Unlock()
 
-	// 异步启动处理
-	go c.process(job.ID, source, opts)
+	// 异步启动处理：脱离请求取消链，作业不会被客户端断开打断（G118 修复）
+	jobCtx := context.WithoutCancel(ctx)
+	go c.process(jobCtx, job.ID, source, opts)
 
 	return job, nil
 }
@@ -55,15 +57,15 @@ func (c *SQLiteCompiler) Compile(_ context.Context, source string, opts memory.C
 // process 后台处理编译作业（状态机推进）。
 // 当前：直接把 source 当文本写入 kb_store（占位），后续接 LLM 提炼+切块+embedding。
 // opts 当前未用，LLM 提炼阶段接入（Phase 3 后续）。
-func (c *SQLiteCompiler) process(jobID, source string, _ memory.CompileOptions) {
+func (c *SQLiteCompiler) process(ctx context.Context, jobID, source string, _ memory.CompileOptions) {
 	c.updateStatus(jobID, memory.JobProcessing, 0, 1, "")
 
 	// 骨架：源文本直接入库（Phase 3 后续替换为完整管道）
-	err := c.store.Upsert(context.Background(), memory.Entry{
-		Content:      source,
-		Source:       source,
-		SourceHash:   hashSource(source),
-		Importance:   0.5,
+	err := c.store.Upsert(ctx, memory.Entry{
+		Content:    source,
+		Source:     source,
+		SourceHash: hashSource(source),
+		Importance: 0.5,
 	})
 	if err != nil {
 		c.updateStatus(jobID, memory.JobFailed, 0, 1, err.Error())
@@ -112,8 +114,8 @@ func (c *SQLiteCompiler) Retry(ctx context.Context, id string) (*memory.CompileJ
 		return nil, fmt.Errorf("作业非失败状态，无法重试: %s", job.Status)
 	}
 
-	// 重置为 pending 重新处理
-	go c.process(id, job.Source, memory.CompileOptions{})
+	// 重置为 pending 重新处理（脱离请求取消链）
+	go c.process(context.WithoutCancel(ctx), id, job.Source, memory.CompileOptions{})
 	return c.GetJob(ctx, id)
 }
 

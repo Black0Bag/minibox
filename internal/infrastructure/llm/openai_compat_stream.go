@@ -15,9 +15,9 @@ import (
 type chatCompletionStreamResp struct {
 	Choices []struct {
 		Delta struct {
-			Content      string         `json:"content"`
-			Reasoning    string         `json:"reasoning_content"` // DeepSeek 思考
-			ToolCalls    []chatToolCall `json:"tool_calls"`
+			Content   string         `json:"content"`
+			Reasoning string         `json:"reasoning_content"` // DeepSeek 思考
+			ToolCalls []chatToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`

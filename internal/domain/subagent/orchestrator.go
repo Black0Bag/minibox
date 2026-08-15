@@ -12,8 +12,8 @@ import (
 
 // Task 交给 subagent 的工作单元。
 type Task struct {
-	AgentID   string `json:"agent_id"`  // 哪个 subagent 执行
-	Objective string `json:"objective"` // 拆解后的子任务
+	AgentID   string `json:"agent_id"`   // 哪个 subagent 执行
+	Objective string `json:"objective"`  // 拆解后的子任务
 	MaxTokens int    `json:"max_tokens"` // 预算上限
 }
 
@@ -56,9 +56,9 @@ type Config struct {
 
 // RunReport 调度报告。
 type RunReport struct {
-	Results     []Result `json:"results"`
-	Failures    []Failure `json:"failures"`
-	TokensSpent int       `json:"tokens_spent"`
+	Results     []Result      `json:"results"`
+	Failures    []Failure     `json:"failures"`
+	TokensSpent int           `json:"tokens_spent"`
 	Elapsed     time.Duration `json:"elapsed"`
 }
 
@@ -87,10 +87,10 @@ type Orchestrator interface {
 type AgentConfig struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
-	SystemPrompt string   `json:"system_prompt"` // 独立人格
-	Model        string   `json:"model,omitempty"` // 独立模型（空=继承主 agent）
+	SystemPrompt string   `json:"system_prompt"`    // 独立人格
+	Model        string   `json:"model,omitempty"`  // 独立模型（空=继承主 agent）
 	Skills       []string `json:"skills,omitempty"` // 可调 skill
-	Tools        []string `json:"tools,omitempty"` // 工具白名单
+	Tools        []string `json:"tools,omitempty"`  // 工具白名单
 	MaxTurns     int      `json:"max_turns,omitempty"`
 }
 

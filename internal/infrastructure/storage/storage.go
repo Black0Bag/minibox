@@ -19,7 +19,8 @@ import (
 func Open(cfg config.DatabaseConfig) (*sql.DB, error) {
 	// 确保数据目录存在
 	if dir := filepath.Dir(cfg.Path); dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		// 数据目录含知识库快照，收紧权限防他用户读取（golang-security G301）
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("创建数据目录失败: %w", err)
 		}
 	}

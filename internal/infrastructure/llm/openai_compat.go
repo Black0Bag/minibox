@@ -44,13 +44,13 @@ func (c *OpenAICompat) Name() string { return c.name }
 
 // chatCompletionReq OpenAI chat/completions 请求体。
 type chatCompletionReq struct {
-	Model           string             `json:"model"`
-	Messages        []chatMessage      `json:"messages"`
-	Stream          bool               `json:"stream,omitempty"`
-	MaxTokens       *int               `json:"max_tokens,omitempty"`
-	Temperature     *float64           `json:"temperature,omitempty"`
-	Tools           []chatTool         `json:"tools,omitempty"`
-	ReasoningEffort *string            `json:"reasoning_effort,omitempty"`
+	Model           string        `json:"model"`
+	Messages        []chatMessage `json:"messages"`
+	Stream          bool          `json:"stream,omitempty"`
+	MaxTokens       *int          `json:"max_tokens,omitempty"`
+	Temperature     *float64      `json:"temperature,omitempty"`
+	Tools           []chatTool    `json:"tools,omitempty"`
+	ReasoningEffort *string       `json:"reasoning_effort,omitempty"`
 }
 
 // chatMessage 消息。
@@ -63,8 +63,8 @@ type chatMessage struct {
 
 // chatTool 工具定义。
 type chatTool struct {
-	Type     string         `json:"type"`
-	Function chatFunction   `json:"function"`
+	Type     string       `json:"type"`
+	Function chatFunction `json:"function"`
 }
 
 type chatFunction struct {
@@ -77,10 +77,10 @@ type chatFunction struct {
 type chatCompletionResp struct {
 	Choices []struct {
 		Message struct {
-			Role         string            `json:"role"`
-			Content      string            `json:"content"`
-			Reasoning    string            `json:"reasoning_content"` // DeepSeek 等用此字段
-			ToolCalls    []chatToolCall    `json:"tool_calls"`
+			Role      string         `json:"role"`
+			Content   string         `json:"content"`
+			Reasoning string         `json:"reasoning_content"` // DeepSeek 等用此字段
+			ToolCalls []chatToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

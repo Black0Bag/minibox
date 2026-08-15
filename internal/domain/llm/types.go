@@ -62,8 +62,8 @@ type Message struct {
 
 // ToolDef 工具定义（供 LLM 调用）。
 type ToolDef struct {
-	Type        string       `json:"type"`
-	Function    FunctionDef  `json:"function"`
+	Type     string      `json:"type"`
+	Function FunctionDef `json:"function"`
 }
 
 // FunctionDef 函数定义。
@@ -125,25 +125,25 @@ const (
 
 // StreamEvent 流式事件（归一化）。
 type StreamEvent struct {
-	Type       StreamEventType
-	Text       string     // TextDelta 时
-	Thinking   string     // ThinkingDelta 时
-	ToolCallID string     // ToolCallDelta 时
-	ToolCall   *ToolCall  // Done 时的完整工具调用
-	Usage      *Usage     // Done 时
-	FinishReason string   // Done 时
-	Err        error      // Error 时
+	Type         StreamEventType
+	Text         string    // TextDelta 时
+	Thinking     string    // ThinkingDelta 时
+	ToolCallID   string    // ToolCallDelta 时
+	ToolCall     *ToolCall // Done 时的完整工具调用
+	Usage        *Usage    // Done 时
+	FinishReason string    // Done 时
+	Err          error     // Error 时
 }
 
 // ModelInfo 模型能力信息（能力识别结果，Q4A2）。
 type ModelInfo struct {
-	ID                   string   `json:"id"`
-	ContextLength        int      `json:"context_length"`
-	MaxOutputTokens      int      `json:"max_output_tokens"`
-	SupportsTools        bool     `json:"supports_tools"`
-	SupportsThinking     bool     `json:"supports_thinking"`
-	SupportedEfforts     []string `json:"supported_efforts,omitempty"` // 支持的思考强度
-	SupportsVision       bool     `json:"supports_vision"`
-	SupportsStructuredOut bool    `json:"supports_structured_out"`
-	Provenance           string   `json:"provenance"` // api / probe / models_dev / manual
+	ID                    string   `json:"id"`
+	ContextLength         int      `json:"context_length"`
+	MaxOutputTokens       int      `json:"max_output_tokens"`
+	SupportsTools         bool     `json:"supports_tools"`
+	SupportsThinking      bool     `json:"supports_thinking"`
+	SupportedEfforts      []string `json:"supported_efforts,omitempty"` // 支持的思考强度
+	SupportsVision        bool     `json:"supports_vision"`
+	SupportsStructuredOut bool     `json:"supports_structured_out"`
+	Provenance            string   `json:"provenance"` // api / probe / models_dev / manual
 }

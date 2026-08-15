@@ -46,10 +46,10 @@ func (o *Orchestrator) Register(a subagent.Agent) {
 
 // Dispatch 把计划扇出并发执行并合成结果。
 // 关键陷阱（BackendBytes 2026）：
-//   1. subagent 失败 record 到 slice，return nil（不杀兄弟）
-//   2. 预算 atomic reserve-and-reconcile 在 worker 内
-//   3. panic 隔离
-//   4. 结果排序 pre-size results[index]
+//  1. subagent 失败 record 到 slice，return nil（不杀兄弟）
+//  2. 预算 atomic reserve-and-reconcile 在 worker 内
+//  3. panic 隔离
+//  4. 结果排序 pre-size results[index]
 func (o *Orchestrator) Dispatch(ctx context.Context, plan []subagent.Task) (subagent.RunReport, error) {
 	start := time.Now()
 
@@ -174,13 +174,16 @@ func (o *Orchestrator) RunChain(ctx context.Context, tasks []subagent.Task) (sub
 }
 
 // RunBackground 后台异步执行（立即返回结果通道）。
-func (o *Orchestrator) RunBackground(_ context.Context, t subagent.Task) (<-chan subagent.Result, error) {
+// 后台任务脱离调用方取消链但保留 ctx 值（golang-context：context.WithoutCancel）。
+func (o *Orchestrator) RunBackground(ctx context.Context, t subagent.Task) (<-chan subagent.Result, error) {
 	if _, ok := o.agents[t.AgentID]; !ok {
 		return nil, fmt.Errorf("subagent 未注册: %s", t.AgentID)
 	}
 	ch := make(chan subagent.Result, 1)
 	go func() {
-		res, err := o.RunSingle(context.Background(), t)
+		// 不随请求取消而中断；若无 ctx 传入则用 Background
+		bgCtx := context.WithoutCancel(ctx)
+		res, err := o.RunSingle(bgCtx, t)
 		if err != nil {
 			res = subagent.Result{AgentID: t.AgentID, Error: err.Error()}
 		}

@@ -9,13 +9,13 @@ import (
 
 // UIEvent 前端统一事件（对应第 2 项 SSE agent.* 事件）。
 type UIEvent struct {
-	Type      string      `json:"type"`      // agent.text_message_content / reasoning_delta / tool_call_start ...
-	MessageID string      `json:"message_id,omitempty"`
-	Delta     string      `json:"delta,omitempty"`
-	ToolName  string      `json:"tool_name,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Content   string      `json:"content,omitempty"`
-	IsError   bool        `json:"is_error,omitempty"`
+	Type       string `json:"type"` // agent.text_message_content / reasoning_delta / tool_call_start ...
+	MessageID  string `json:"message_id,omitempty"`
+	Delta      string `json:"delta,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Content    string `json:"content,omitempty"`
+	IsError    bool   `json:"is_error,omitempty"`
 }
 
 // Normalizer 把 LLM 流式事件归一化为 UI 事件。

@@ -1,7 +1,8 @@
 // Package permission 定义权限策略（B23 三层级中的防火墙层）。
 // 设计：三态 Allow/Deny/Ask（tRPC-Agent 2026 实证）。
 // 门控顺序（core-agent Gate 实证）：
-//   可见性过滤 → Plan 门控 → 模式检查 → 禁止表 → 策略 → 人工批准 → 参数校验 → 执行截断。
+//
+//	可见性过滤 → Plan 门控 → 模式检查 → 禁止表 → 策略 → 人工批准 → 参数校验 → 执行截断。
 package permission
 
 import (

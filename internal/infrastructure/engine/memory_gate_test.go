@@ -27,6 +27,10 @@ func (m *mockStore) PutCache(_ context.Context, _ memory.Entry, _ int64) error {
 	return nil
 }
 func (m *mockStore) Delete(_ context.Context, _ int64, _ memory.Tier) error { return nil }
+func (m *mockStore) Embed(_ context.Context, _ int64, _ memory.Tier, _ []float32) error {
+	return nil
+}
+func (m *mockStore) RemoveEmbedding(_ context.Context, _ int64, _ memory.Tier) error { return nil }
 
 var _ memory.Store = (*mockStore)(nil)
 

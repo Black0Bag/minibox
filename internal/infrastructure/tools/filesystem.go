@@ -20,16 +20,16 @@ import (
 
 // fileTool 基于 fsutil.PathValidator 的文件工具公共载体。
 type fileTool struct {
-	name    string
-	desc    string
-	schema  json.RawMessage
-	meta    tools.Metadata
-	fs      *fsutil.PathValidator
-	fn      func(ctx context.Context, fs *fsutil.PathValidator, args map[string]json.RawMessage) (string, error)
+	name   string
+	desc   string
+	schema json.RawMessage
+	meta   tools.Metadata
+	fs     *fsutil.PathValidator
+	fn     func(ctx context.Context, fs *fsutil.PathValidator, args map[string]json.RawMessage) (string, error)
 }
 
-func (f *fileTool) Name() string        { return f.name }
-func (f *fileTool) Description() string { return f.desc }
+func (f *fileTool) Name() string                { return f.name }
+func (f *fileTool) Description() string         { return f.desc }
 func (f *fileTool) JSONSchema() json.RawMessage { return f.schema }
 func (f *fileTool) Metadata() tools.Metadata    { return f.meta }
 
@@ -143,7 +143,7 @@ func NewListDir(fs *fsutil.PathValidator) tools.Tool {
 				sb.WriteString("\n")
 				if recursive && e.IsDir() {
 					sub := filepath.Join(p, e.Name())
-					_ = walkDir(&sb, fs, sub, 1)
+					_ = walkDir(&sb, sub, 1)
 				}
 			}
 			return sb.String(), nil
@@ -152,7 +152,8 @@ func NewListDir(fs *fsutil.PathValidator) tools.Tool {
 }
 
 // walkDir 递归目录（深度限制防环/爆栈）。
-func walkDir(sb *strings.Builder, fs *fsutil.PathValidator, dir string, depth int) error {
+// 说明：从已校验的目录递归进入其子目录，路径始终在沙箱根内（golang-security）。
+func walkDir(sb *strings.Builder, dir string, depth int) error {
 	if depth > 6 {
 		return nil
 	}
@@ -166,7 +167,7 @@ func walkDir(sb *strings.Builder, fs *fsutil.PathValidator, dir string, depth in
 			entry += "/"
 			sb.WriteString(entry)
 			sb.WriteString("\n")
-			_ = walkDir(sb, fs, filepath.Join(dir, e.Name()), depth+1)
+			_ = walkDir(sb, filepath.Join(dir, e.Name()), depth+1)
 		} else {
 			sb.WriteString(entry)
 			sb.WriteString("\n")
@@ -283,7 +284,7 @@ func NewWriteFile(fs *fsutil.PathValidator) tools.Tool {
 				}
 				return "已追加", nil
 			}
-			if err := fs.WriteFile(in.Path, []byte(in.Content), 0o644); err != nil {
+			if err := fs.WriteFile(in.Path, []byte(in.Content), 0o600); err != nil {
 				return "", err
 			}
 			return "已写入", nil
@@ -296,7 +297,9 @@ func appendFile(fs *fsutil.PathValidator, path string, data []byte) error {
 	if err := fs.Validate(path); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	// #nosec G304 -- path 已通过 fsutil.PathValidator 沙箱校验（上一行）
+	// agent 写文件默认 0600（防他用户读取，golang-security G302）
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("打开追加目标失败 %s: %w", path, err)
 	}

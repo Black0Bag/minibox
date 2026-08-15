@@ -91,5 +91,5 @@ func estimateTokens(s string) int {
 		}
 		return r == ' ' || r == '\n' || r == '\t' || r == '，' || r == '。'
 	})
-return cjk + len(words)
+	return cjk + len(words)
 }

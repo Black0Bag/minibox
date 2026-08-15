@@ -13,17 +13,24 @@ import (
 // T 是事件类型，订阅者收到 T 类型的值。
 type Bus[T any] struct {
 	mu     sync.RWMutex
-	subs   []Subscriber[T]
+	subs   []subEntry[T]
+	nextID uint64
 	logger *slog.Logger
 }
 
 // Subscriber 订阅者回调。
 type Subscriber[T any] func(ctx context.Context, event T)
 
+// subEntry 订阅条目（带唯一 token，退订可靠）。
+type subEntry[T any] struct {
+	id uint64
+	fn Subscriber[T]
+}
+
 // New 创建事件总线。
 func New[T any](logger *slog.Logger) *Bus[T] {
 	return &Bus[T]{
-		subs:   make([]Subscriber[T], 0),
+		subs:   make([]subEntry[T], 0),
 		logger: logger,
 	}
 }
@@ -32,12 +39,14 @@ func New[T any](logger *slog.Logger) *Bus[T] {
 func (b *Bus[T]) Subscribe(fn Subscriber[T]) func() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.subs = append(b.subs, fn)
+	b.nextID++
+	id := b.nextID
+	b.subs = append(b.subs, subEntry[T]{id: id, fn: fn})
 	return func() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		for i, s := range b.subs {
-			if &s == &fn {
+			if s.id == id {
 				b.subs = append(b.subs[:i], b.subs[i+1:]...)
 				return
 			}
@@ -50,7 +59,9 @@ func (b *Bus[T]) Subscribe(fn Subscriber[T]) func() {
 func (b *Bus[T]) Publish(ctx context.Context, event T) {
 	b.mu.RLock()
 	subs := make([]Subscriber[T], len(b.subs))
-	copy(subs, b.subs)
+	for i, s := range b.subs {
+		subs[i] = s.fn
+	}
 	b.mu.RUnlock()
 
 	for _, sub := range subs {

@@ -164,6 +164,7 @@ func (a *Acquirer) downloadWithRetry(ctx context.Context, spec ToolSpec) (string
 
 // downloadOnce 单次下载（从 offset 断点续传）。
 func (a *Acquirer) downloadOnce(ctx context.Context, spec ToolSpec, tmp string, offset int64) error {
+	// #nosec G304,G302 -- tmp 为 a.Dir 内 .part 文件（内部构造）；0700 防他用户读取未校验二进制
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o700)
 	if err != nil {
 		return err
@@ -214,6 +215,7 @@ func (a *Acquirer) downloadOnce(ctx context.Context, spec ToolSpec, tmp string, 
 
 // verifySHA256File 校验文件哈希是否匹配。
 // 返回 (匹配, 实际哈希, 错误)。文件不存在返回 (false, "", nil)。
+// #nosec G304 -- path 由 verifySHA256File 内部构造（缓存目录内），非用户直接输入
 func verifySHA256File(path, want string) (bool, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -234,6 +236,7 @@ func verifySHA256File(path, want string) (bool, string, error) {
 
 // atomicInstall 原子安装：rename 临时文件到目标，并确保可执行。
 func atomicInstall(tmp, final string) error {
+	// #nosec G302 -- 工具二进制需可执行位，0700 owner-only 已是安全默认
 	if err := os.Chmod(tmp, 0o700); err != nil {
 		return err
 	}
@@ -267,10 +270,10 @@ func (b *b8Tool) JSONSchema() json.RawMessage {
 }
 func (b *b8Tool) Metadata() tools.Metadata {
 	return tools.Metadata{
-		OpenWorld:         true,
-		MaxResultSize:     512,
-		RiskTier:          "high",
-		RequiresApproval:  true,
+		OpenWorld:        true,
+		MaxResultSize:    512,
+		RiskTier:         "high",
+		RequiresApproval: true,
 	}
 }
 
@@ -313,6 +316,7 @@ func IsolatedRun(ctx context.Context, toolDir, bin string, args []string, timeou
 		path = filepath.Join(toolDir, bin)
 	}
 
+	// #nosec G204 -- exec 独立参数传参（禁 shell），bin 路径来自 B8 spec 下载目录
 	cmd := exec.CommandContext(ctx, path, args...)
 	// 前置工具 bin，后跟系统基础目录（隔离 PATH）
 	cmd.Env = append(os.Environ(), "PATH="+toolDir+":"+isolationPath())

@@ -23,8 +23,10 @@ type shellTool struct {
 	timeout time.Duration
 }
 
-func (s *shellTool) Name() string        { return "shell" }
-func (s *shellTool) Description() string { return "执行命令。输入 {command, args?}。高风险，需人工批准。" }
+func (s *shellTool) Name() string { return "shell" }
+func (s *shellTool) Description() string {
+	return "执行命令。输入 {command, args?}。高风险，需人工批准。"
+}
 func (s *shellTool) JSONSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
@@ -37,12 +39,12 @@ func (s *shellTool) JSONSchema() json.RawMessage {
 }
 func (s *shellTool) Metadata() tools.Metadata {
 	return tools.Metadata{
-		Destructive:       true,
-		ConcurrencySafe:   false,
-		OpenWorld:         true,
-		MaxResultSize:     1 << 16,
-		RiskTier:          "high",
-		RequiresApproval:  true,
+		Destructive:      true,
+		ConcurrencySafe:  false,
+		OpenWorld:        true,
+		MaxResultSize:    1 << 16,
+		RiskTier:         "high",
+		RequiresApproval: true,
 	}
 }
 
@@ -67,6 +69,7 @@ func (s *shellTool) Invoke(ctx context.Context, input json.RawMessage) (string, 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// #nosec G204 -- exec 独立参数传参（禁 bash -c），命令注入不可能（golang-security）
 	cmd := exec.CommandContext(ctx, in.Command, in.Args...)
 	// 隔离 PATH（B8）：只允许受信目录
 	cmd.Env = append(os.Environ(), "PATH="+isolationPath())

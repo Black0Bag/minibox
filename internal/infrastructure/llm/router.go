@@ -25,9 +25,9 @@ type ProviderEntry struct {
 func NewProviderEntry(p llm.Provider, name string) *ProviderEntry {
 	cb := gobreaker.NewCircuitBreaker[any](gobreaker.Settings{
 		Name:        "llm-" + name,
-		MaxRequests: 5,                  // half-open 最大请求
-		Interval:    30 * time.Second,   // 清除计数周期
-		Timeout:     10 * time.Second,   // open 到 half-open 探测间隔
+		MaxRequests: 5,                // half-open 最大请求
+		Interval:    30 * time.Second, // 清除计数周期
+		Timeout:     10 * time.Second, // open 到 half-open 探测间隔
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
 			// 失败率 > 20% 且请求数 > 10 时打开（n1n.ai 实证）
 			return counts.Requests > 10 && float64(counts.TotalFailures)/float64(counts.Requests) > 0.2

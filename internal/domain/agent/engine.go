@@ -45,13 +45,13 @@ type Run struct {
 	SessionID   string        `json:"session_id"`
 	State       State         `json:"state"`
 	Mode        Mode          `json:"mode"`
-	Steps       int           `json:"steps"`         // 已走步数（预算）
-	TokensSpent int           `json:"tokens_spent"`  // token 消耗
-	Messages    []llm.Message `json:"messages"`      // 可续传的对话
+	Steps       int           `json:"steps"`                  // 已走步数（预算）
+	TokensSpent int           `json:"tokens_spent"`           // token 消耗
+	Messages    []llm.Message `json:"messages"`               // 可续传的对话
 	PendingTool *llm.ToolCall `json:"pending_tool,omitempty"` // 待执行工具
-	Plan        *Plan         `json:"plan,omitempty"`        // Plan/Build 模式
-	SeenCalls   []string      `json:"seen_calls"`            // 已执行工具指纹（防重复）
-	Answer      string        `json:"answer,omitempty"`      // 最终答案
+	Plan        *Plan         `json:"plan,omitempty"`         // Plan/Build 模式
+	SeenCalls   []string      `json:"seen_calls"`             // 已执行工具指纹（防重复）
+	Answer      string        `json:"answer,omitempty"`       // 最终答案
 	Error       string        `json:"error,omitempty"`
 	CreatedAt   time.Time     `json:"created_at"`
 	UpdatedAt   time.Time     `json:"updated_at"`
@@ -68,11 +68,11 @@ const MaxSteps = 20
 
 // Config Agent 引擎配置。
 type Config struct {
-	MaxSteps       int   // 硬步数上限
-	MaxTokens      int   // 硬 token 上限
-	Mode           Mode  // 默认模式
-	RequirePlan    bool  // 是否强制 plan-first（写工具需先 record_plan）
-	ToolOutputCap  int   // 工具输出截断上限（默认 8000，multigrid 实证）
+	MaxSteps      int  // 硬步数上限
+	MaxTokens     int  // 硬 token 上限
+	Mode          Mode // 默认模式
+	RequirePlan   bool // 是否强制 plan-first（写工具需先 record_plan）
+	ToolOutputCap int  // 工具输出截断上限（默认 8000，multigrid 实证）
 }
 
 // Engine Agent 引擎接口。
@@ -99,17 +99,17 @@ type Engine interface {
 // Request 启动请求。
 type Request struct {
 	SessionID string
-	Message   string   // 用户输入
-	Mode      Mode     // 覆盖默认模式
+	Message   string        // 用户输入
+	Mode      Mode          // 覆盖默认模式
 	History   []llm.Message // 历史消息（可选）
 }
 
 // Dependencies Engine 依赖（composition root 注入）。
 // 接口在消费方定义（Go 惯例，daveamit 实证）。
 type Dependencies struct {
-	LLM    llm.Provider      // LLM 供应商
-	Memory memory.Store      // 知识库
-	Tools  ToolExecutor      // 工具执行器（Phase 5 定义）
+	LLM    llm.Provider // LLM 供应商
+	Memory memory.Store // 知识库
+	Tools  ToolExecutor // 工具执行器（Phase 5 定义）
 }
 
 // ToolExecutor 工具执行接口（Phase 5 实现，这里定义窄接口）。
