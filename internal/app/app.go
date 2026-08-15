@@ -6,9 +6,14 @@ package app
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/domain/scheduler"
+	"github.com/Black0Bag/minibox/internal/domain/setup"
 	"github.com/Black0Bag/minibox/internal/domain/tools"
+	"github.com/Black0Bag/minibox/internal/domain/worldbook"
+	infrasched "github.com/Black0Bag/minibox/internal/infrastructure/scheduler"
 	httptransport "github.com/Black0Bag/minibox/internal/transport/http"
 	ssetransport "github.com/Black0Bag/minibox/internal/transport/sse"
 	wstransport "github.com/Black0Bag/minibox/internal/transport/ws"
@@ -22,6 +27,23 @@ type App struct {
 	sse     *ssetransport.Server
 	ws      *wstransport.Server
 	toolReg *tools.Registry
+	// Phase 7 装配：调度中枢 / 世界书 / 角色卡 / 首启向导
+	wz       *setup.Wizard
+	cred     *setup.DeviceCredential
+	guard    *setup.PathGuard
+	wbLoader *worldbook.Loader
+	cron     *infrasched.CronScheduler
+}
+
+// taskRunner 调度任务执行器（Phase 7 占位：Agent 引擎联动在 Phase 8 跨模块装配）。
+type taskRunner struct {
+	logger *slog.Logger
+}
+
+// Run 占位执行：记录触发，等待 Phase 8 接入 Agent 引擎。
+func (r *taskRunner) Run(_ context.Context, task scheduler.Task) (string, int, error) {
+	r.logger.Info("调度任务触发（执行器占位）", "task", task.ID, "type", string(task.Type), "spec", task.Spec)
+	return "占位执行（Phase 8 接入 Agent 引擎）", 0, nil
 }
 
 // New 创建 App，装配所有依赖。
@@ -30,14 +52,34 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	// 工具注册表（Phase 5 模块27，供 /tools 端点）
 	reg := tools.NewRegistry()
 
+	// Phase 7 装配：首启向导 + 设备凭据 + 敏感路径拦截
+	dataDir := filepath.Dir(cfg.Database.Path) // 与数据库同目录
+	wz := setup.New(setup.NewFileStore(filepath.Join(dataDir, "setup.json")))
+	guard := setup.DefaultPathGuard()
+
+	// 设备凭据：首次启动自动生成（0600），WS 设备通道握手用
+	cred, err := setup.LoadOrCreate(filepath.Join(dataDir, "device.cred"))
+	if err != nil {
+		logger.Warn("设备凭据初始化失败", "err", err)
+	}
+	_ = cred // 握手鉴权在 Phase 8 联动
+
+	// 调度中枢（模块35）与世界书装载器（模块36）
+	cron := infrasched.New(&taskRunner{logger: logger}, logger)
+	wbLoader := worldbook.New(worldbook.Hooks{})
+
 	a := &App{
-		cfg:     cfg,
-		logger:  logger,
-		toolReg: reg,
-		// 传输层装配（三通道独立路由，共用 domain/transport.Envelope）
-		http: httptransport.New(cfg.Server, logger, reg),
-		sse:  ssetransport.New(logger),
-		ws:   wstransport.New(logger),
+		cfg:      cfg,
+		logger:   logger,
+		toolReg:  reg,
+		http:     httptransport.New(cfg.Server, logger, reg),
+		sse:      ssetransport.New(logger),
+		ws:       wstransport.New(logger),
+		wz:       wz,
+		cred:     cred,
+		guard:    guard,
+		wbLoader: wbLoader,
+		cron:     cron,
 	}
 	return a, nil
 }
@@ -67,9 +109,41 @@ func (a *App) WS() *wstransport.Server {
 	return a.ws
 }
 
+// Wizard 返回首次启动向导（供传输层锁定/向导端点联动）。
+func (a *App) Wizard() *setup.Wizard {
+	return a.wz
+}
+
+// DeviceCredential 返回设备凭据（供 WS 握手鉴权）。
+func (a *App) DeviceCredential() *setup.DeviceCredential {
+	return a.cred
+}
+
+// PathGuard 返回敏感路径拦截器（供只读工具联动）。
+func (a *App) PathGuard() *setup.PathGuard {
+	return a.guard
+}
+
+// WorldbookLoader 返回世界书装载器。
+func (a *App) WorldbookLoader() *worldbook.Loader {
+	return a.wbLoader
+}
+
+// Cron 返回调度中枢。
+func (a *App) Cron() *infrasched.CronScheduler {
+	return a.cron
+}
+
 // Run 启动应用。
 // 当前：仅启动 HTTP 传输层（REST + SSE + WS 共用一个端口）。
 func (a *App) Run(ctx context.Context) error {
+	// 首启向导锁定：未完成前提示，运输层端点按需放行（Phase 8 联动）
+	if need, err := a.wz.NeedWizard(); err != nil {
+		a.logger.Warn("向导状态读取失败", "err", err)
+	} else if need {
+		a.logger.Info("首次启动：等待完成配置向导", "data_dir", filepath.Dir(a.cfg.Database.Path))
+	}
+
 	a.logger.Info("minibox 启动",
 		"port", a.cfg.Server.Port,
 		"listen", a.cfg.Server.Listen,
