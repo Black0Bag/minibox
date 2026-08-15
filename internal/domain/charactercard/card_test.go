@@ -81,9 +81,6 @@ func TestParse_V2(t *testing.T) {
 	if c.Description != "银发魔导师，掌管古老魔法图书馆。" {
 		t.Errorf("Description 应取 data: %q", c.Description)
 	}
-	// 空字段回退顶层垫片
-	c2, _ := Parse([]byte(v2Card))
-	_ = c2
 	if c.CharacterVersion != "1.0.0" || len(c.Tags) != 2 || c.CreatorNotes == "" {
 		t.Errorf("V2 新字段解析错误: %+v", c)
 	}

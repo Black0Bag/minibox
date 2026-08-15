@@ -9,8 +9,6 @@ package skill
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 )
 
 // Metadata skill 元数据（Level1 常驻 system，~100 token）。
@@ -36,13 +34,17 @@ func (s *Skill) Level1() string {
 
 // LoadBody 按需加载 skill body（Level2，append-only 缓存）。
 // 已加载则直接返回缓存（幂等，不重复读盘）。
+// 使用 os.Root 限制在 skill 目录内（Go 1.24+ 内核级防穿越 + 防 symlink 逃逸）。
 func (s *Skill) LoadBody() (string, error) {
 	if s.bodyLoaded {
 		return s.body, nil // 缓存命中（append-only，不覆盖）
 	}
-	path := filepath.Join(s.Root, "SKILL.md")
-	// #nosec G304 -- path 由 skill 目录拼接固定文件名，目录由组合根配置注入
-	data, err := os.ReadFile(path)
+	root, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return "", fmt.Errorf("打开 skill 目录失败: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile("SKILL.md")
 	if err != nil {
 		return "", fmt.Errorf("读取 skill body 失败: %w", err)
 	}
@@ -52,16 +54,14 @@ func (s *Skill) LoadBody() (string, error) {
 }
 
 // ReadFile 读取 skill 资源文件（Level3，read_skill_file）。
-// 路径限制在 skill 目录内（golang-security 路径沙箱）。
+// 路径限制在 skill 目录内（os.Root 内核级沙箱：防路径穿越 + 防 symlink 逃逸）。
 func (s *Skill) ReadFile(relPath string) (string, error) {
-	// 防路径穿越：只允许 skill 目录内的资源
-	clean := filepath.Clean(relPath)
-	if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
-		return "", fmt.Errorf("skill 资源路径越界: %s", relPath)
+	root, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return "", fmt.Errorf("打开 skill 目录失败: %w", err)
 	}
-	full := filepath.Join(s.Root, clean)
-	// #nosec G304 -- relPath 已做穿越防护（上一行），目录由组合根配置注入
-	data, err := os.ReadFile(full)
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(relPath)
 	if err != nil {
 		return "", fmt.Errorf("读取 skill 资源失败: %w", err)
 	}

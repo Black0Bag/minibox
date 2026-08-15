@@ -47,10 +47,18 @@ func (d *DeviceCredential) Verify(candidate string) bool {
 }
 
 // LoadOrCreate 从文件加载凭据；文件不存在则生成并写入（0600，目录不存在自动创建）。
-// 校验失败返回错误（文件损坏时拒绝静默覆盖——fail-closed）。
+// 校验失败返回错误（文件损坏/权限过宽时拒绝静默覆盖——fail-closed）。
 func LoadOrCreate(path string) (*DeviceCredential, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path 由组合根配置注入（data 目录），非不可信输入
 	if err == nil {
+		// 读取已有文件时校验权限：非 0600 说明可能被放宽，fail-closed
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return nil, fmt.Errorf("读取设备凭据属性失败: %w", statErr)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			return nil, fmt.Errorf("设备凭据文件权限过宽: %s（%o，期望 600）", path, perm)
+		}
 		token := strings.TrimSpace(string(data))
 		if len(token) != credentialLen*2 {
 			return nil, fmt.Errorf("设备凭据文件损坏: %s（长度异常）", path)

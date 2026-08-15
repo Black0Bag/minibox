@@ -117,6 +117,22 @@ func TestDeviceCredential_LoadCorrupt(t *testing.T) {
 	}
 }
 
+// TestDeviceCredential_LoosePermission 权限过宽的已有凭据 → fail-closed 拒绝。
+func TestDeviceCredential_LoosePermission(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "device.cred")
+	// 先正确生成，再把权限放宽到 0644
+	if _, err := LoadOrCreate(path); err != nil {
+		t.Fatalf("首次创建失败: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreate(path); err == nil {
+		t.Error("权限过宽的凭据文件应报错")
+	}
+}
+
 func TestPathGuard_Default(t *testing.T) {
 	g := DefaultPathGuard()
 	cases := []struct {
@@ -169,6 +185,17 @@ func TestPathGuard_Custom(t *testing.T) {
 	}
 }
 
+// TestPathGuard_EmptyPattern 空 pattern 应被跳过（strings.Contains 恒真陷阱）。
+func TestPathGuard_EmptyPattern(t *testing.T) {
+	g := NewPathGuard("", "/opt/secret")
+	if g.IsSensitive("/home/user/normal.txt") {
+		t.Error("空 pattern 不应让所有路径命中")
+	}
+	if !g.IsSensitive("/opt/secret/a.json") {
+		t.Error("非空 pattern 仍应正常命中")
+	}
+}
+
 func TestSetup_RoundTrip(t *testing.T) {
 	// 模拟真实生命周期：首次启动 → 向导完成 → 验证秒级内的状态一致性
 	dir := t.TempDir()
@@ -187,5 +214,31 @@ func TestSetup_RoundTrip(t *testing.T) {
 	need2, err := w2.NeedWizard()
 	if err != nil || need2 {
 		t.Errorf("重读后应完成: need=%v err=%v", need2, err)
+	}
+}
+
+// TestFileStore_PendingSymmetry 写 pending 应能读回 pending（读写对称）。
+func TestFileStore_PendingSymmetry(t *testing.T) {
+	fs := newFileStore(t)
+	if err := fs.Save(StatusPending); err != nil {
+		t.Fatalf("Save(pending) 失败: %v", err)
+	}
+	st, err := fs.Load()
+	if err != nil {
+		t.Fatalf("Load 应成功读回 pending: %v", err)
+	}
+	if st != StatusPending {
+		t.Errorf("状态 = %v, 期望 pending", st)
+	}
+}
+
+// TestFileStore_CorruptContent 未知内容 fail-closed 报错。
+func TestFileStore_CorruptContent(t *testing.T) {
+	fs := newFileStore(t)
+	if err := os.WriteFile(fs.path, []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.Load(); err == nil {
+		t.Error("未知内容应报错")
 	}
 }

@@ -31,6 +31,8 @@ func (f *FileStore) Load() (Status, error) {
 		return StatusPending, fmt.Errorf("读取向导状态失败: %w", err)
 	}
 	switch strings.TrimSpace(string(data)) {
+	case "pending":
+		return StatusPending, nil
 	case "completed":
 		return StatusCompleted, nil
 	default:

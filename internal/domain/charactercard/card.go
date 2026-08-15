@@ -116,7 +116,7 @@ func Parse(data []byte) (*Card, error) {
 	return card, nil
 }
 
-// ParseFile 从文件读取并解析角色卡。
+// ParseFile 从文件读取并解析角色卡（路径由调用方指定，非不可信相对路径）。
 func ParseFile(path string) (*Card, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path 由调用方（组合根/导入器）指定，非网络不可信输入
 	if err != nil {

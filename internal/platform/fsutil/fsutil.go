@@ -65,12 +65,36 @@ func (v *PathValidator) Validate(path string) error {
 }
 
 // ReadFile 读取文件（带路径校验）。
+// Root 内的路径经 os.Root 打开（内核级防穿越 + 防 symlink 逃逸）；
+// AllowedPaths（配置信任的额外路径）直接读取。
 func (v *PathValidator) ReadFile(path string) ([]byte, error) {
 	if err := v.Validate(path); err != nil {
 		return nil, err
 	}
-	// #nosec G304 -- path 已通过 PathValidator.Validate 沙箱校验（上一行）
-	data, err := os.ReadFile(path)
+	// 判断 path 是否在 Root 内（可走 os.Root 约束）
+	rootAbs, err := filepath.Abs(v.Root)
+	if err != nil {
+		return nil, fmt.Errorf("解析根目录失败 %s: %w", v.Root, err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("解析路径失败 %s: %w", path, err)
+	}
+	if rel, err := filepath.Rel(rootAbs, abs); err == nil &&
+		(rel == "." || (!strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, string(filepath.Separator)))) {
+		root, err := os.OpenRoot(rootAbs)
+		if err != nil {
+			return nil, fmt.Errorf("打开根目录失败 %s: %w", rootAbs, err)
+		}
+		defer func() { _ = root.Close() }()
+		data, err := root.ReadFile(rel)
+		if err != nil {
+			return nil, fmt.Errorf("读取文件失败 %s: %w", path, err)
+		}
+		return data, nil
+	}
+	// AllowedPaths 内的信任路径（配置显式允许，非不可信输入）
+	data, err := os.ReadFile(path) // #nosec G304 -- AllowedPaths 由配置显式允许
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败 %s: %w", path, err)
 	}
@@ -78,9 +102,35 @@ func (v *PathValidator) ReadFile(path string) ([]byte, error) {
 }
 
 // WriteFile 写入文件（带路径校验）。
+// Root 内的路径经 os.Root 打开（防 symlink 逃逸）；AllowedPaths 直接写。
 func (v *PathValidator) WriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := v.Validate(path); err != nil {
 		return err
+	}
+	rootAbs, err := filepath.Abs(v.Root)
+	if err != nil {
+		return fmt.Errorf("解析根目录失败 %s: %w", v.Root, err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("解析路径失败 %s: %w", path, err)
+	}
+	if rel, err := filepath.Rel(rootAbs, abs); err == nil &&
+		(rel == "." || (!strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, string(filepath.Separator)))) {
+		root, err := os.OpenRoot(rootAbs)
+		if err != nil {
+			return fmt.Errorf("打开根目录失败 %s: %w", rootAbs, err)
+		}
+		defer func() { _ = root.Close() }()
+		if dir := filepath.Dir(rel); dir != "." {
+			if err := mkdirAllInRoot(root, dir, 0o750); err != nil {
+				return fmt.Errorf("创建目录失败 %s: %w", dir, err)
+			}
+		}
+		if err := root.WriteFile(rel, data, perm); err != nil {
+			return fmt.Errorf("写入文件失败 %s: %w", path, err)
+		}
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("创建目录失败 %s: %w", filepath.Dir(path), err)
@@ -95,4 +145,19 @@ func (v *PathValidator) WriteFile(path string, data []byte, perm os.FileMode) er
 func Exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// mkdirAllInRoot 在 os.Root 内递归创建目录（root.Mkdir 只建一层）。
+func mkdirAllInRoot(root *os.Root, dir string, perm os.FileMode) error {
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if _, err := root.Lstat(dir); err == nil {
+		return nil
+	}
+	parent := filepath.Dir(dir)
+	if err := mkdirAllInRoot(root, parent, perm); err != nil {
+		return err
+	}
+	return root.Mkdir(dir, perm)
 }

@@ -60,6 +60,7 @@ func DefaultPathGuard() *PathGuard {
 
 // IsSensitive 判断路径是否命中黑名单。
 // 规则：pattern 以 / 开头 → 路径前缀匹配；否则 → 忽略大小写做通配包含匹配。
+// 空 pattern 跳过（strings.Contains(s, "") 恒真，会误伤全部路径）。
 func (g *PathGuard) IsSensitive(path string) bool {
 	if g == nil {
 		return false
@@ -74,7 +75,10 @@ func (g *PathGuard) IsSensitive(path string) bool {
 			continue
 		}
 		needle := strings.ToLower(p)
-		if needle == "" || strings.Contains(lower, needle) {
+		if needle == "" {
+			continue
+		}
+		if strings.Contains(lower, needle) {
 			return true
 		}
 	}

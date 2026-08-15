@@ -81,6 +81,23 @@ func TestReadFile_PathTraversal(t *testing.T) {
 	}
 }
 
+// TestReadFile_SymlinkEscape 符号链接逃逸防护（os.Root 内核级拦截）。
+func TestReadFile_SymlinkEscape(t *testing.T) {
+	dir := writeTestSkill(t, "body", "")
+	// 在 skill 目录内放一个指向外部文件的 symlink
+	target := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(target, []byte("外部机密"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "link.txt")); err != nil {
+		t.Skipf("环境不支持 symlink: %v", err)
+	}
+	s := &Skill{Root: dir}
+	if _, err := s.ReadFile("link.txt"); err == nil {
+		t.Fatal("symlink 逃逸应被拒绝")
+	}
+}
+
 // TestRegistry 注册/获取/列出。
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
