@@ -30,12 +30,10 @@ jobs:
       - name: 测试（零 CGO，不启用 race）
         run: go test -count=1 ./...
 
-      - name: 边界测试（模块隔离守护）
+      - name: 架构守护（模块 40：跨模块边界）
         run: |
-          # 验证模块间不互相 import（模块化单体红线）
-          # 各 domain 模块不得 import 其他 domain 模块
-          go list -deps ./internal/domain/llm | grep -q "internal/domain/agent" && echo "❌ llm 依赖 agent（越界）" && exit 1 || echo "✅ llm 无越界依赖"
-          go list -deps ./internal/domain/agent | grep -q "internal/domain/tools" && echo "⚠️ agent 依赖 tools（评估）" || echo "✅ 依赖检查完成"
+          # 分层约束由 internal/arch 测试强制（domain 不依赖 infra/transport/app 等）
+          go test -count=1 ./internal/arch/
 
   lint:
     name: 静态检查

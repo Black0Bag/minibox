@@ -16,6 +16,13 @@ import (
 	"github.com/Black0Bag/minibox/internal/platform/logging"
 )
 
+// 版本信息（GoReleaser ldflags 注入：-X main.version=...）。
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "minibox 启动失败: %v\n", err)
@@ -32,7 +39,7 @@ func run() error {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println("minibox v0.0.1")
+		fmt.Printf("minibox %s (commit %s, built %s)\n", version, commit, date)
 		return nil
 	}
 
