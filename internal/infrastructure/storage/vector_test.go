@@ -130,15 +130,20 @@ func TestRemoveEmbedding(t *testing.T) {
 		t.Fatalf("RemoveEmbedding 失败: %v", err)
 	}
 
-	// 删除后 KNN 无结果
+	// 删除后 hybrid 无向量结果，降级 FTS5 仍可命中（降级健壮性）
 	hits, err := store.Search(ctx, memory.SearchQuery{
 		Text: "测试", Tier: memory.TierStore, TopK: 10, QueryVector: vecFor(10, 1),
 	})
 	if err != nil {
 		t.Fatalf("Search 失败: %v", err)
 	}
-	if len(hits) != 0 {
-		t.Errorf("删除向量后不应有结果，实际 %d 条", len(hits))
+	if len(hits) == 0 {
+		t.Error("删除向量后 FTS5/LIKE 降级应仍可命中，实际 0 条")
+	}
+	for _, h := range hits {
+		if h.MatchType == "vec" || h.MatchType == "hybrid" {
+			t.Errorf("删除向量后不应有 vec 级别命中，match_type=%s", h.MatchType)
+		}
 	}
 }
 

@@ -118,4 +118,8 @@ type ToolExecutor interface {
 	Execute(ctx context.Context, call llm.ToolCall) (string, error)
 	// RequiresApproval 判断工具是否需要人类批准。
 	RequiresApproval(ctx context.Context, call llm.ToolCall) bool
+	// ToolDefs 返回工具定义列表（供 LLM 看到并调用，function calling schema）。
+	ToolDefs() []llm.ToolDef
+	// IsReadOnly 判断工具是否只读（plan 门控用：只读工具不强制 plan-first）。
+	IsReadOnly(name string) bool
 }

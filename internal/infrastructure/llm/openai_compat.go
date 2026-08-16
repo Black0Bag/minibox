@@ -65,10 +65,23 @@ type chatCompletionReq struct {
 
 // chatMessage 消息。
 type chatMessage struct {
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	Name       string `json:"name,omitempty"`
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Name       string         `json:"name,omitempty"`
+	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+}
+
+// chatToolCall 消息内嵌的工具调用（OpenAI 标准：assistant 消息携带）。
+type chatToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function chatToolCallFunc `json:"function"`
+}
+
+type chatToolCallFunc struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // chatTool 工具定义。
@@ -100,15 +113,6 @@ type chatCompletionResp struct {
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
 	Model string `json:"model"`
-}
-
-type chatToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
 }
 
 // Complete 非流式生成。
@@ -165,12 +169,27 @@ func (c *OpenAICompat) Complete(ctx context.Context, req llm.Request) (*llm.Resp
 func (c *OpenAICompat) buildRequest(req llm.Request, stream bool) ([]byte, error) {
 	messages := make([]chatMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
-		messages = append(messages, chatMessage{
+		cm := chatMessage{
 			Role:       string(m.Role),
 			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
 			Name:       m.Name,
-		})
+		}
+		// assistant 消息的 tool_calls 必须携带（OpenAI 标准：tool 结果需关联 assistant tool_call）
+		if len(m.ToolCalls) > 0 {
+			cm.ToolCalls = make([]chatToolCall, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				cm.ToolCalls = append(cm.ToolCalls, chatToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: chatToolCallFunc{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
+		}
+		messages = append(messages, cm)
 	}
 
 	tools := make([]chatTool, 0, len(req.Tools))

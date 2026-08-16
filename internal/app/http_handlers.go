@@ -192,7 +192,16 @@ func (a *App) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 	if req.TopK <= 0 {
 		req.TopK = 5
 	}
-	hits, err := a.memory.Search(r.Context(), memory.SearchQuery{Text: req.Query, TopK: req.TopK})
+	query := memory.SearchQuery{Text: req.Query, TopK: req.TopK, Tier: memory.TierStore}
+	// 查询向量：embedder 可用时走 hybrid（vector+FTS5，asymmetric 模型须 query 模式）
+	if a.embedder != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if vec, err := a.embedder.EmbedQuery(ctx, req.Query); err == nil && len(vec) > 0 {
+			query.QueryVector = vec
+		}
+	}
+	hits, err := a.memory.Search(r.Context(), query)
 	if err != nil {
 		a.respondErr(w, r, http.StatusInternalServerError, "search_error", err.Error())
 		return

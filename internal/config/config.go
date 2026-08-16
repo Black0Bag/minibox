@@ -31,6 +31,8 @@ type EmbeddingConfig struct {
 	APIKey string `koanf:"api_key"`
 	// Model 向量模型名（如 nvidia/llama-nemotron-embed-vl-1b-v2）。
 	Model string `koanf:"model"`
+	// Dimensions 输出向量维度（0=模型默认；须与 kb_vec 索引维度一致，默认 1024）。
+	Dimensions int `koanf:"dimensions"`
 	// Timeout 请求超时。
 	Timeout time.Duration `koanf:"timeout"`
 }
@@ -173,7 +175,8 @@ func Default() Config {
 			MaxTokens:        3000,
 		},
 		Embedding: EmbeddingConfig{
-			Timeout: 30 * time.Second,
+			Dimensions: 1024,
+			Timeout:    30 * time.Second,
 		},
 	}
 }

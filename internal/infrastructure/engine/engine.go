@@ -137,18 +137,40 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 		return run, nil
 	}
 
+	if e.logger != nil {
+		e.logger.Info("LLM 响应",
+			"run_id", run.ID, "steps", run.Steps,
+			"content_len", len(resp.Content),
+			"tool_calls", len(resp.ToolCalls),
+			"finish", resp.FinishReason,
+			"msg_count", len(messages),
+			"content_preview", truncate(resp.Content, 80),
+		)
+		// 空回答调试：打印消息角色序列，定位 LLM 为何给空答案
+		if len(resp.ToolCalls) == 0 && resp.Content == "" {
+			roles := make([]string, 0, len(messages))
+			for _, m := range messages {
+				roles = append(roles, string(m.Role))
+			}
+			e.logger.Warn("LLM 空回答调试",
+				"run_id", run.ID, "msg_roles", roles,
+				"last_content", truncate(lastMsgContent(messages), 120),
+			)
+		}
+	}
+
 	run.Steps++
 	run.TokensSpent += resp.Usage.TotalTokens
-	run.Messages = append(run.Messages, llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: resp.Content,
-	})
-	run.UpdatedAt = time.Now()
 
 	if len(resp.ToolCalls) == 0 {
-		// 最终答案
+		// 最终答案：持久化 assistant（无 tool_calls）
+		run.Messages = append(run.Messages, llm.Message{Role: llm.RoleAssistant, Content: resp.Content})
 		run.Answer = resp.Content
 		run.State = agent.StateDone
+		run.UpdatedAt = time.Now()
+		if e.logger != nil && resp.Content == "" {
+			e.logger.Warn("LLM 返回空内容且无工具调用，视为无回答", "run_id", run.ID, "steps", run.Steps)
+		}
 		return run, nil
 	}
 
@@ -157,30 +179,60 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 
 	// 重复调用检测（指纹）
 	fp := fingerprint(call)
+	dup := false
 	for _, seen := range run.SeenCalls {
 		if seen == fp {
-			run.State = agent.StateFailed
-			run.Error = fmt.Sprintf("重复工具调用: %s", call.Name)
-			return run, nil
+			dup = true
+			break
 		}
 	}
 
-	run.PendingTool = &call
+	// 重复调用：不杀死 run（RAG 3.0 多跳可能重试同查询），
+	// 而是注入提示让 LLM 换查询或基于已有结果回答（multigrid "search-again spiral" 引导）。
+	// 注意：不持久化带 tool_call 的 assistant（否则 tool 结果缺失导致后续请求不匹配）。
+	// 防死循环：MaxSteps 硬限 + SeenCalls 累积，循环必然撞预算失败。
+	if dup {
+		run.Messages = append(run.Messages, llm.Message{
+			Role: llm.RoleUser,
+			Content: "你刚刚已调用过工具 " + call.Name + " 且参数完全相同，请勿重复调用。" +
+				"要么换一个不同的检索词/参数，要么基于已有结果直接回答。",
+		})
+		run.State = agent.StatePlanning
+		run.UpdatedAt = time.Now()
+		return run, nil
+	}
 
 	// Plan 门控（go-steer/core-agent 实证）：写工具需先 record_plan
 	if e.requiresPlan(call) && !e.planRecorded(run) {
 		run.State = agent.StateFailed
 		run.Error = fmt.Sprintf("工具 %s 需要先记录计划（plan-first）", call.Name)
+		run.UpdatedAt = time.Now()
 		return run, nil
 	}
 
 	// 是否需要人类批准
 	if e.tools != nil && e.tools.RequiresApproval(ctx, call) {
+		// 持久化 assistant（带 tool_call），供批准后执行链关联
+		run.Messages = append(run.Messages, llm.Message{
+			Role:      llm.RoleAssistant,
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		})
+		run.PendingTool = &call
 		run.State = agent.StateAwaitingApproval
+		run.UpdatedAt = time.Now()
 		return run, nil
 	}
 
+	// 正常执行：持久化 assistant（带 tool_calls，OpenAI 标准关联 tool 结果）
+	run.Messages = append(run.Messages, llm.Message{
+		Role:      llm.RoleAssistant,
+		Content:   resp.Content,
+		ToolCalls: resp.ToolCalls,
+	})
+	run.PendingTool = &call
 	run.State = agent.StateActing
+	run.UpdatedAt = time.Now()
 	return run, nil
 }
 
@@ -299,18 +351,23 @@ func (e *Engine) Get(runID string) (*agent.Run, bool) {
 }
 
 // requiresPlan 判断工具是否需要 plan-first 门控。
+// 原则（core-agent "gate everything by default" 的平衡版）：
+//   - 只读工具（ReadOnly 元数据）不需要 plan（search/read 是安全的探索）
+//   - 写/exec/破坏性工具需要 plan（先记录计划再执行）
+//   - record_plan 是逃生阀，本身不受 gate
 func (e *Engine) requiresPlan(call llm.ToolCall) bool {
 	if !e.cfg.RequirePlan {
 		return false
 	}
-	// 写/exec 类工具需 plan；读工具不需要（core-agent 实证）
-	switch call.Name {
-	case "write_file", "edit_file", "delete_file", "bash", "spawn_agent", "record_plan":
-		return call.Name != "record_plan" // record_plan 是逃生阀
-	default:
-		// 保守：未知工具默认 gate（core-agent "gate everything by default"）
-		return true
+	if call.Name == "record_plan" {
+		return false // 逃生阀
 	}
+	// 依据元数据：只读工具放行（search_knowledge/read_file/search_files 等）
+	if e.tools != nil && e.tools.IsReadOnly(call.Name) {
+		return false
+	}
+	// 写/破坏性/未知工具：默认 gate（保守）
+	return true
 }
 
 // planRecorded 判断是否已记录计划。
@@ -318,11 +375,12 @@ func (e *Engine) planRecorded(run *agent.Run) bool {
 	return run.Plan != nil && run.Plan.Recorded
 }
 
-// toolsSchema 从工具执行器获取工具 schema（Phase 5 接入）。
-// 当前返回空（Phase 5 补全）。
+// toolsSchema 从工具执行器获取工具 schema（function calling）。
 func (e *Engine) toolsSchema() []llm.ToolDef {
-	// Phase 5 从 Registry 获取
-	return nil
+	if e.tools == nil {
+		return nil
+	}
+	return e.tools.ToolDefs()
 }
 
 // newRunID 生成运行 ID。
@@ -335,6 +393,22 @@ func newRunID() string {
 func fingerprint(call llm.ToolCall) string {
 	h := sha256.Sum256([]byte(call.Name + ":" + call.Arguments))
 	return call.Name + ":" + hex.EncodeToString(h[:8])
+}
+
+// truncate 截断长字符串（日志调试用）。
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// lastMsgContent 取最后一条消息内容（调试日志用）。
+func lastMsgContent(msgs []llm.Message) string {
+	if len(msgs) == 0 {
+		return ""
+	}
+	return msgs[len(msgs)-1].Content
 }
 
 var _ = json.Marshal

@@ -51,7 +51,8 @@ type App struct {
 	compiler  *storage.SQLiteCompiler
 	distiller memory.Distiller
 	assembler memory.Assembler
-	toolkit   *toolkit // 工具执行器（带权限链）
+	embedder  *embedAdapter // 向量化客户端（query/passage 双模式）
+	toolkit   *toolkit      // 工具执行器（带权限链）
 
 	// Phase 7 装配
 	wz       *setup.Wizard
@@ -144,8 +145,16 @@ func (a *App) openDatabase(cfg config.Config) error {
 	// 编译管道 + 蒸馏 + 组装器（阶段 2.1 接 embedding）
 	a.compiler = storage.NewCompiler(db, store)
 	if cfg.Embedding.BaseURL != "" && cfg.Embedding.Model != "" {
-		ec := infrallm.NewEmbeddingClient(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Timeout)
-		a.compiler.SetEmbedder(&embedAdapter{client: ec, model: cfg.Embedding.Model})
+		dim := cfg.Embedding.Dimensions
+		if dim <= 0 {
+			dim = 1024 // 与 kb_vec 索引维度一致
+		}
+		ec := infrallm.NewEmbeddingClient(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Timeout, dim)
+		ad := &embedAdapter{client: ec, model: cfg.Embedding.Model}
+		a.embedder = ad
+		a.compiler.SetEmbedder(ad)
+	} else {
+		a.logger.Warn("embedding 未配置，向量检索降级 FTS5/LIKE", "base_url", cfg.Embedding.BaseURL, "model", cfg.Embedding.Model)
 	}
 	a.distiller = storage.NewDistiller(db)
 	a.assembler = storage.NewAssembler(store)
@@ -158,9 +167,14 @@ type embedAdapter struct {
 	model  string
 }
 
-// EmbedBatch 实现 storage.Embedder。
+// EmbedBatch 实现 storage.Embedder（passage 模式，索引用）。
 func (ad *embedAdapter) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	return ad.client.EmbedBatch(ctx, ad.model, texts)
+}
+
+// EmbedQuery 生成查询向量（query 模式，检索用）。
+func (ad *embedAdapter) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	return ad.client.EmbedQuery(ctx, ad.model, text)
 }
 
 var _ storage.Embedder = (*embedAdapter)(nil)
@@ -199,6 +213,13 @@ func (a *App) buildTools(cfg config.Config) error {
 		infratools.NewSearchFiles(validator),
 	} {
 		if err := reg.Register(t); err != nil {
+			return err
+		}
+	}
+
+	// 知识库检索工具（RAG 3.0：Agent 自主决定何时检索）
+	if a.memory != nil {
+		if err := reg.Register(infratools.NewSearchKnowledge(a.memory, a.embedder)); err != nil {
 			return err
 		}
 	}

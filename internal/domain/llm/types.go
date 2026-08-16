@@ -58,6 +58,7 @@ type Message struct {
 	Content    string      `json:"content"`
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	Name       string      `json:"name,omitempty"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"` // assistant 消息附带的工具调用（OpenAI 标准）
 }
 
 // ToolDef 工具定义（供 LLM 调用）。

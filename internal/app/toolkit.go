@@ -33,6 +33,7 @@ func (t *toolkit) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		decision, reason, err := t.policy.Check(ctx, permission.Request{
 			ToolName: call.Name,
 			Metadata: tool.Metadata(),
+			Mode:     permission.ModePlan, // Agent 默认 Plan 模式：只读放行，写需 plan
 		})
 		if err != nil {
 			return "", fmt.Errorf("权限检查失败: %w", err)
@@ -72,10 +73,61 @@ func (t *toolkit) RequiresApproval(ctx context.Context, call llm.ToolCall) bool 
 		decision, _, err := t.policy.Check(ctx, permission.Request{
 			ToolName: call.Name,
 			Metadata: tool.Metadata(),
+			Mode:     permission.ModePlan,
 		})
 		return err == nil && decision == permission.DecisionAsk
 	}
 	return false
+}
+
+// ToolDefs 返回工具定义列表（function calling schema，LLM 可见）。
+// 描述来自工具 Description + JSONSchema（OpenAI 标准：type=function + name + description + parameters）。
+func (t *toolkit) ToolDefs() []llm.ToolDef {
+	if t.reg == nil {
+		return nil
+	}
+	tools := t.reg.List()
+	if len(tools) == 0 {
+		return nil
+	}
+	defs := make([]llm.ToolDef, 0, len(tools))
+	for _, tool := range tools {
+		schema := tool.JSONSchema()
+		if len(schema) == 0 {
+			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		defs = append(defs, llm.ToolDef{
+			Type: "function",
+			Function: llm.FunctionDef{
+				Name:        tool.Name(),
+				Description: tool.Description(),
+				Parameters:  mustMap(schema),
+			},
+		})
+	}
+	return defs
+}
+
+// mustMap 把 JSON schema 解析为 map（非法 JSON 时返回空对象 schema）。
+func mustMap(raw json.RawMessage) map[string]any {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	return m
+}
+
+// IsReadOnly 判断工具是否只读（plan 门控：只读工具不强制 plan-first）。
+// 依据工具元数据 ReadOnly（内核原则：权限/门控看元数据，不看硬编码名单）。
+func (t *toolkit) IsReadOnly(name string) bool {
+	if t.reg == nil {
+		return false
+	}
+	tool, ok := t.reg.Get(name)
+	if !ok {
+		return false
+	}
+	return tool.Metadata().ReadOnly
 }
 
 var _ agent.ToolExecutor = (*toolkit)(nil)

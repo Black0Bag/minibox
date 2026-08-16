@@ -26,6 +26,7 @@ func NewSQLiteStore(db *sql.DB, tokenizer memory.Tokenizer) *SQLiteStore {
 // Search 混合检索（三级降级：Hybrid→FTS5→LIKE，mika ADR-003 实证）。
 // 有 QueryVector → Hybrid（vec KNN + FTS5 + RRF 融合）；
 // 无向量 → FTS5 → LIKE 降级。
+// 任何一级空结果/失败都会继续降级（保证不因单级空结果丢失检索能力）。
 func (s *SQLiteStore) Search(ctx context.Context, q memory.SearchQuery) ([]memory.Hit, error) {
 	if q.TopK == 0 {
 		q.TopK = 10
@@ -38,15 +39,23 @@ func (s *SQLiteStore) Search(ctx context.Context, q memory.SearchQuery) ([]memor
 	// 1. 有查询向量 → Hybrid（向量 + FTS5 融合）
 	if len(q.QueryVector) > 0 {
 		hits, err := s.hybridSearch(ctx, q.Tier, q)
+		if err == nil && len(hits) > 0 {
+			return hits, nil
+		}
+		// hybrid 失败或空结果 → 继续降级（不因向量空结果丢失检索）
+		ftsHits, ftsErr := s.searchFTS(ctx, table, q)
+		if ftsErr == nil && len(ftsHits) > 0 {
+			return ftsHits, nil
+		}
+		likeHits, likeErr := s.searchLike(ctx, table, q)
+		if likeErr == nil && len(likeHits) > 0 {
+			return likeHits, nil
+		}
+		// 全部降级都空：返回最上层错误（若有）
 		if err != nil {
-			// Hybrid 失败（如 vec0 不可用）→ 降级 FTS5
-			ftsHits, ftsErr := s.searchFTS(ctx, table, q)
-			if ftsErr == nil && len(ftsHits) > 0 {
-				return ftsHits, nil
-			}
 			return nil, err
 		}
-		return hits, nil
+		return nil, nil
 	}
 
 	// 2. 无向量 → FTS5

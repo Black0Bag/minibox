@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Black0Bag/minibox/internal/domain/llm"
@@ -57,6 +58,10 @@ func TestMemoryGateInject(t *testing.T) {
 	if injected[0].Role != llm.RoleSystem {
 		t.Errorf("首条应是 system，实际 %s", injected[0].Role)
 	}
+	// openfang #583 教训：记忆已注入时引导直接用，避免重复调用 search_knowledge
+	if !strings.Contains(injected[0].Content, "直接使用") || strings.Contains(injected[0].Content, "再次调用 search_knowledge") == false {
+		t.Errorf("注入提示应引导直接使用且不重复检索: %s", injected[0].Content)
+	}
 }
 
 // TestMemoryGateEmpty 验证无记忆时不注入。
@@ -72,8 +77,12 @@ func TestMemoryGateEmpty(t *testing.T) {
 	if count != 0 {
 		t.Errorf("无记忆应 count=0，实际 %d", count)
 	}
-	if len(injected) != len(msgs) {
-		t.Errorf("无记忆不应增加消息，实际 %d", len(injected))
+	// 空命中会注入一条提示（引导用 search_knowledge，RAG 3.0 多跳）
+	if len(injected) != len(msgs)+1 {
+		t.Errorf("空命中应注入 1 条 search_knowledge 提示，实际 %d", len(injected))
+	}
+	if !strings.Contains(injected[0].Content, "search_knowledge") {
+		t.Errorf("提示应引导用 search_knowledge: %s", injected[0].Content)
 	}
 }
 

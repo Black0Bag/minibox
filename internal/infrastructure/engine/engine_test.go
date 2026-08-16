@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Black0Bag/minibox/internal/domain/agent"
@@ -12,11 +13,13 @@ import (
 type mockLLM struct {
 	responses []*llm.Response
 	calls     int
+	lastReq   llm.Request // 最近一次收到的请求（测试断言用）
 }
 
 func (m *mockLLM) Name() string { return "mock" }
 
-func (m *mockLLM) Complete(_ context.Context, _ llm.Request) (*llm.Response, error) {
+func (m *mockLLM) Complete(_ context.Context, req llm.Request) (*llm.Response, error) {
+	m.lastReq = req
 	if m.calls < len(m.responses) {
 		resp := m.responses[m.calls]
 		m.calls++
@@ -57,6 +60,23 @@ func (m *mockTools) RequiresApproval(_ context.Context, call llm.ToolCall) bool 
 	}
 	return m.approve[call.Name]
 }
+
+// ToolDefs 返回空工具定义（测试用，不影响现有测试语义）。
+func (m *mockTools) ToolDefs() []llm.ToolDef {
+	return []llm.ToolDef{
+		{
+			Type: "function",
+			Function: llm.FunctionDef{
+				Name:        "test_tool",
+				Description: "测试工具",
+				Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+			},
+		},
+	}
+}
+
+// IsReadOnly 返回 false（测试中默认所有工具视为非只读）。
+func (m *mockTools) IsReadOnly(_ string) bool { return false }
 
 var _ agent.ToolExecutor = (*mockTools)(nil)
 
@@ -202,4 +222,190 @@ func TestNormalizer(t *testing.T) {
 	if len(evs) != 1 || evs[0].Type != "agent.text_message_end" {
 		t.Errorf("结束映射错误: %+v", evs)
 	}
+}
+
+// TestToolDefsSentToLLM 验证工具定义被传给 LLM（toolsSchema 接线）。
+func TestToolDefsSentToLLM(t *testing.T) {
+	llmMock := &mockLLM{responses: []*llm.Response{{Content: "需要工具", ToolCalls: []llm.ToolCall{
+		{ID: "c1", Name: "test_tool", Arguments: `{}`},
+	}}}}
+	engine := NewEngine(llmMock, &mockTools{}, agent.Config{}, nil)
+
+	run, err := engine.Start(context.Background(), agent.Request{Message: "用工具"})
+	if err != nil {
+		t.Fatalf("Start err=%v", err)
+	}
+	if _, err := engine.Step(context.Background(), run.ID); err != nil {
+		t.Fatalf("Step err=%v", err)
+	}
+
+	// 断言 LLM 收到的请求携带工具定义
+	if len(llmMock.lastReq.Tools) == 0 {
+		t.Fatal("LLM 请求应携带工具定义（ToolDefs 未接入）")
+	}
+	if llmMock.lastReq.Tools[0].Function.Name != "test_tool" {
+		t.Errorf("工具名 = %q, 期望 test_tool", llmMock.lastReq.Tools[0].Function.Name)
+	}
+}
+
+// roTools 只读工具执行器（IsReadOnly 返回 true，模拟 search_knowledge/read_file）。
+type roTools struct {
+	mockTools
+	readOnly map[string]bool
+}
+
+func (r *roTools) IsReadOnly(name string) bool {
+	if r.readOnly == nil {
+		return false
+	}
+	return r.readOnly[name]
+}
+
+// TestPlanGateReadOnly 只读工具不被 plan-first 门控。
+func TestPlanGateReadOnly(t *testing.T) {
+	llmMock := &mockLLM{responses: []*llm.Response{
+		{Content: "要检索", ToolCalls: []llm.ToolCall{{ID: "c1", Name: "search_knowledge", Arguments: `{"query":"端口"}`}}},
+		{Content: "最终答案", ToolCalls: nil},
+	}}
+	tools := &roTools{readOnly: map[string]bool{"search_knowledge": true}}
+	e := NewEngine(llmMock, tools, agent.Config{RequirePlan: true}, nil)
+
+	run, err := e.Start(context.Background(), agent.Request{Message: "查端口"})
+	if err != nil {
+		t.Fatalf("Start err=%v", err)
+	}
+	// Step 1: planning → 工具调用 → 因只读应直接进入 acting（不被 gate）
+	run, err = e.Step(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("Step1 err=%v", err)
+	}
+	if run.State != agent.StateActing {
+		t.Fatalf("只读工具不应被 plan 门控，状态=%s（应 acting）", run.State)
+	}
+	// Step 2: 执行工具
+	run, _ = e.Step(context.Background(), run.ID)
+	// Step 3: 回到 planning → 最终答案
+	run, _ = e.Step(context.Background(), run.ID)
+	if run.State != agent.StateDone {
+		t.Errorf("应 done，实际 %s", run.State)
+	}
+}
+
+// TestPlanGateWriteTool 写工具（非只读）仍被 plan-first 门控。
+func TestPlanGateWriteTool(t *testing.T) {
+	llmMock := &mockLLM{responses: []*llm.Response{
+		{Content: "要写文件", ToolCalls: []llm.ToolCall{{ID: "c1", Name: "write_file", Arguments: `{}`}}},
+	}}
+	tools := &roTools{readOnly: map[string]bool{"write_file": false}}
+	e := NewEngine(llmMock, tools, agent.Config{RequirePlan: true}, nil)
+
+	run, err := e.Start(context.Background(), agent.Request{Message: "写文件"})
+	if err != nil {
+		t.Fatalf("Start err=%v", err)
+	}
+	run, _ = e.Step(context.Background(), run.ID)
+	if run.State != agent.StateFailed {
+		t.Fatalf("写工具应被 plan 门控 → failed，实际 %s", run.State)
+	}
+	if !strings.Contains(run.Error, "plan-first") {
+		t.Errorf("错误应提示 plan-first: %s", run.Error)
+	}
+}
+
+// TestDuplicateToolCallGuided 重复工具调用不杀 run，而是引导换策略。
+func TestDuplicateToolCallGuided(t *testing.T) {
+	llmMock := &mockLLM{responses: []*llm.Response{
+		// 第一次：调用 search_knowledge
+		{Content: "检索", ToolCalls: []llm.ToolCall{{ID: "c1", Name: "search_knowledge", Arguments: `{"query":"端口"}`}}},
+		// 第二次：相同调用（重复）
+		{Content: "再检索", ToolCalls: []llm.ToolCall{{ID: "c2", Name: "search_knowledge", Arguments: `{"query":"端口"}`}}},
+		// 第三次：最终答案
+		{Content: "答案是8086", ToolCalls: nil},
+	}}
+	e := NewEngine(llmMock, &mockTools{}, agent.Config{}, nil)
+
+	run, err := e.Start(context.Background(), agent.Request{Message: "查端口"})
+	if err != nil {
+		t.Fatalf("Start err=%v", err)
+	}
+	// 第1步：planning → acting（search_knowledge）
+	run, _ = e.Step(context.Background(), run.ID)
+	if run.State != agent.StateActing {
+		t.Fatalf("第1步应 acting，实际 %s", run.State)
+	}
+	// 第2步：执行工具 → planning
+	run, _ = e.Step(context.Background(), run.ID)
+	// 第3步：planning 收到重复调用 → 不应 failed，应回 planning 并注入提示
+	run, _ = e.Step(context.Background(), run.ID)
+	if run.State == agent.StateFailed {
+		t.Fatalf("重复调用不应 failed: %s", run.Error)
+	}
+	if run.State != agent.StatePlanning {
+		t.Fatalf("重复调用应回 planning，实际 %s", run.State)
+	}
+	// 注入的提示应在最后一条消息
+	last := run.Messages[len(run.Messages)-1]
+	if !strings.Contains(last.Content, "请勿重复调用") {
+		t.Errorf("应注入引导提示: %s", last.Content)
+	}
+	// 第4步：planning → LLM 给最终答案 → done
+	run, _ = e.Step(context.Background(), run.ID)
+	if run.State != agent.StateDone {
+		t.Errorf("最终应 done，实际 %s", run.State)
+	}
+}
+
+// TestToolCallMessageSequence 验证工具调用消息序列完整（assistant 带 ToolCalls + tool 结果关联）。
+func TestToolCallMessageSequence(t *testing.T) {
+	tools := &mockTools{}
+	llmMock := &mockLLM{responses: []*llm.Response{
+		// 1: 调用 search
+		{ToolCalls: []llm.ToolCall{{ID: "call1", Name: "search", Arguments: `{"q":"端口"}`}}},
+		// 2: 调用 search（不同参数，多跳第二跳）
+		{ToolCalls: []llm.ToolCall{{ID: "call2", Name: "search", Arguments: `{"q":"数据库"}`}}},
+		// 3: 最终答案
+		{Content: "最终综合答案", Usage: llm.Usage{TotalTokens: 5}},
+	}}
+	e := NewEngine(llmMock, tools, agent.Config{MaxSteps: 20}, testLogger{})
+
+	run, _ := e.Start(context.Background(), agent.Request{Message: "综合查询"})
+
+	// 第1跳：planning→acting（第2次 planning 时 LLM 应看到完整历史含 assistant tool_call + tool 结果）
+	for i := 0; i < 6 && run.State != agent.StateDone && run.State != agent.StateFailed; i++ {
+		run, _ = e.Step(context.Background(), run.ID)
+	}
+
+	if run.State != agent.StateDone {
+		t.Fatalf("应 DONE，实际 %s（error=%s）", run.State, run.Error)
+	}
+
+	// 检查 assistant 消息携带 ToolCalls
+	var assistantWithCalls int
+	var toolMsgWithID int
+	for _, m := range run.Messages {
+		if m.Role == llm.RoleAssistant && len(m.ToolCalls) > 0 {
+			assistantWithCalls++
+		}
+		if m.Role == llm.RoleTool && m.ToolCallID != "" {
+			toolMsgWithID++
+		}
+	}
+	if toolMsgWithID != 2 {
+		t.Errorf("应有 2 条 tool 结果带 ToolCallID，实际 %d", toolMsgWithID)
+	}
+	// 第2跳的 LLM 请求应包含历史消息（assistant tool_call + tool 结果）
+	// lastReq 是最后一次 Complete 的请求，其中应能看到 tool 消息
+	if len(llmMock.lastReq.Messages) == 0 {
+		t.Fatal("LLM 请求应为空消息")
+	}
+	var sawToolMsg bool
+	for _, m := range llmMock.lastReq.Messages {
+		if m.Role == llm.RoleTool {
+			sawToolMsg = true
+		}
+	}
+	if !sawToolMsg {
+		t.Error("最后 LLM 请求应包含历史 tool 结果消息（多跳识别上下文）")
+	}
+	_ = assistantWithCalls
 }

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -70,18 +71,18 @@ func (c *SQLiteCompiler) Compile(ctx context.Context, source string, opts memory
 
 // process 后台处理编译作业（状态机推进）。
 // 流程：切块 → 逐块入库 → embedding 可用时写入向量（Store.Embed）。
+// 每 chunk 独立 hash（hashSource(chunk)），确保 GetIDByHash 返回正确行、向量不覆盖。
 func (c *SQLiteCompiler) process(ctx context.Context, jobID, source string, opts memory.CompileOptions) {
 	chunks := chunkSource(source, opts.MaxChunkTokens)
 	c.updateStatus(jobID, memory.JobProcessing, 0, len(chunks), "")
 
-	sourceHash := hashSource(source)
-
 	for i, chunk := range chunks {
+		chunkHash := hashSource(chunk)
 		// 入库（纯文本，向量降级可检索）
 		if err := c.store.Upsert(ctx, memory.Entry{
 			Content:    chunk,
 			Source:     source,
-			SourceHash: sourceHash,
+			SourceHash: chunkHash,
 			Importance: 0.5,
 		}); err != nil {
 			c.updateStatus(jobID, memory.JobFailed, i, len(chunks), err.Error())
@@ -90,11 +91,16 @@ func (c *SQLiteCompiler) process(ctx context.Context, jobID, source string, opts
 
 		// 向量化：embedding 可用时写向量；不可用则跳过（检索自动降级）
 		if c.embedder != nil {
-			id, err := c.store.GetIDByHash(ctx, sourceHash)
+			id, err := c.store.GetIDByHash(ctx, chunkHash)
 			if err == nil && id > 0 {
 				vecs, err := c.embedder.EmbedBatch(ctx, []string{chunk})
-				if err == nil && len(vecs) == 1 {
-					_ = c.store.Embed(ctx, id, memory.TierStore, vecs[0])
+				if err != nil {
+					c.updateStatus(jobID, memory.JobProcessing, i, len(chunks), "向量生成失败: "+err.Error())
+				} else if len(vecs) == 1 {
+					if err := c.store.Embed(ctx, id, memory.TierStore, vecs[0]); err != nil {
+						// 向量写入失败不阻断编译（文本检索仍可用），记录到 job 进度
+						c.updateStatus(jobID, memory.JobProcessing, i, len(chunks), "向量写入失败: "+err.Error())
+					}
 				}
 			}
 		}
@@ -234,10 +240,10 @@ func newJobID() string {
 	return "job_" + hex.EncodeToString(b)
 }
 
-// hashSource 生成源内容哈希（幂等摄入用）。
+// hashSource 生成源内容哈希（幂等摄入 + 每 chunk 唯一标识，SHA-256）。
 func hashSource(s string) string {
-	// 简单哈希（Phase 3 后续用 SHA-256）
-	return fmt.Sprintf("src_%x", len(s))
+	sum := sha256.Sum256([]byte(s))
+	return "src_" + hex.EncodeToString(sum[:8])
 }
 
 var _ = sql.ErrNoRows
