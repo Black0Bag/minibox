@@ -38,7 +38,7 @@ func structToMap(v any) map[string]any {
 }
 
 func structToMapInner(val reflect.Value, out map[string]any) {
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		val = val.Elem()
 	}
 	if val.Kind() != reflect.Struct {
@@ -57,7 +57,7 @@ func structToMapInner(val reflect.Value, out map[string]any) {
 			sub := make(map[string]any)
 			structToMapInner(fv, sub)
 			out[key] = sub
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if fv.IsNil() {
 				continue
 			}

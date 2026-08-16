@@ -128,9 +128,9 @@ func (t *kbSearchTool) Invoke(ctx context.Context, input json.RawMessage) (strin
 	var sb strings.Builder
 	sb.WriteString("知识库检索结果（按相关性排序）：\n")
 	for i, h := range hits {
-		sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, h.Content))
+		fmt.Fprintf(&sb, "[%d] %s\n", i+1, h.Content)
 		if h.Source != "" {
-			sb.WriteString(fmt.Sprintf("    (来源: %s)\n", h.Source))
+			fmt.Fprintf(&sb, "    (来源: %s)\n", h.Source)
 		}
 	}
 	sb.WriteString("以上结果可能不相关，请判断后使用；信息不足请明确说明。")

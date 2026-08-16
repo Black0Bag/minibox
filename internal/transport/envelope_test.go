@@ -83,7 +83,7 @@ func TestNewTraceID(t *testing.T) {
 		t.Errorf("trace_id 应 32 字符，实际 %d", len(id))
 	}
 	for _, c := range id {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			t.Errorf("trace_id 含非 hex 字符: %q", c)
 			break
 		}

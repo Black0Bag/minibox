@@ -17,3 +17,8 @@ linters:
     - revive
     - misspell
     - gocritic
+  exclusions:
+    rules:
+      # 保留编译期接口断言惯用法 `var _ Interface = x`
+      - linters: [staticcheck]
+        text: "QF1011"
