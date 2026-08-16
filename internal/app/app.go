@@ -20,11 +20,13 @@ import (
 	"github.com/Black0Bag/minibox/internal/domain/setup"
 	"github.com/Black0Bag/minibox/internal/domain/tools"
 	"github.com/Black0Bag/minibox/internal/domain/worldbook"
+	"github.com/Black0Bag/minibox/internal/infrastructure/backup"
 	"github.com/Black0Bag/minibox/internal/infrastructure/engine"
 	infrallm "github.com/Black0Bag/minibox/internal/infrastructure/llm"
 	infrasched "github.com/Black0Bag/minibox/internal/infrastructure/scheduler"
 	"github.com/Black0Bag/minibox/internal/infrastructure/storage"
 	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
+	"github.com/Black0Bag/minibox/internal/platform/degradation"
 	"github.com/Black0Bag/minibox/internal/platform/fsutil"
 	httptransport "github.com/Black0Bag/minibox/internal/transport/http"
 	ssetransport "github.com/Black0Bag/minibox/internal/transport/sse"
@@ -55,6 +57,9 @@ type App struct {
 	guard    *setup.PathGuard
 	wbLoader *worldbook.Loader
 	cron     *infrasched.CronScheduler
+	logme    *fsutil.Logme        // 足迹系统（B21）
+	monitor  *degradation.Monitor // 资源降级监控（B16）
+	backup   *backup.Manager      // 备份管理（B18）
 
 	// 会话（对话端点用）
 	sessions *sessionHub
@@ -225,6 +230,9 @@ func (a *App) buildSetup(cfg config.Config) error {
 
 	a.wbLoader = worldbook.New(worldbook.Hooks{})
 	a.cron = infrasched.New(&taskRunner{agent: a.agent, logger: a.logger}, a.logger)
+	a.logme = fsutil.NewLogme(filepath.Join(dataDir, "logme"), 7*24*time.Hour)
+	a.monitor = degradation.NewMonitor()
+	a.backup = backup.NewManager(cfg.Database.Path, filepath.Join(dataDir, "backups"))
 	return nil
 }
 
@@ -356,3 +364,12 @@ func (a *App) WorldbookLoader() *worldbook.Loader { return a.wbLoader }
 
 // Cron 返回调度中枢。
 func (a *App) Cron() *infrasched.CronScheduler { return a.cron }
+
+// Logme 返回足迹系统。
+func (a *App) Logme() *fsutil.Logme { return a.logme }
+
+// Monitor 返回降级监控。
+func (a *App) Monitor() *degradation.Monitor { return a.monitor }
+
+// Backup 返回备份管理器。
+func (a *App) Backup() *backup.Manager { return a.backup }

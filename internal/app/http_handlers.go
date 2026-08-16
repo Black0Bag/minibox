@@ -54,6 +54,12 @@ func (a *App) mountREST(r chi.Router) {
 		r.Post("/{id}/trigger", a.handleScheduleTrigger)
 	})
 
+	// 备份域
+	r.Route("/api/v1/backups", func(r chi.Router) {
+		r.Get("/", a.handleBackupList)
+		r.Post("/export", a.handleBackupSnapshot)
+	})
+
 	// 状态/配置
 	r.Get("/api/v1/server/status", a.handleServerStatus)
 	r.Get("/api/v1/config", a.handleConfig)
@@ -418,6 +424,36 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"default_provider": a.cfg.LLM.DefaultProvider,
 		"default_model":    a.cfg.LLM.DefaultModel,
 	})
+}
+
+// --- 备份域 ---
+
+// handleBackupList 列出备份。
+func (a *App) handleBackupList(w http.ResponseWriter, r *http.Request) {
+	if a.backup == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "backup_unavailable", "备份未就绪")
+		return
+	}
+	list, err := a.backup.List()
+	if err != nil {
+		a.respondErr(w, r, http.StatusInternalServerError, "backup_error", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.backups.list", map[string]any{"backups": list})
+}
+
+// handleBackupSnapshot 创建快照。
+func (a *App) handleBackupSnapshot(w http.ResponseWriter, r *http.Request) {
+	if a.backup == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "backup_unavailable", "备份未就绪")
+		return
+	}
+	path, err := a.backup.Snapshot()
+	if err != nil {
+		a.respondErr(w, r, http.StatusInternalServerError, "backup_error", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.backups.export", map[string]string{"path": path})
 }
 
 // schedulerTask 调度任务 HTTP DTO（与 domain/scheduler.Task 对齐）。
