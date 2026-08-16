@@ -31,6 +31,7 @@ func (m *mockStore) Embed(_ context.Context, _ int64, _ memory.Tier, _ []float32
 	return nil
 }
 func (m *mockStore) RemoveEmbedding(_ context.Context, _ int64, _ memory.Tier) error { return nil }
+func (m *mockStore) GetIDByHash(_ context.Context, _ string) (int64, error)          { return 0, nil }
 
 var _ memory.Store = (*mockStore)(nil)
 

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	infrasched "github.com/Black0Bag/minibox/internal/infrastructure/scheduler"
 	"github.com/Black0Bag/minibox/internal/infrastructure/storage"
 	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
+	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
 	"github.com/Black0Bag/minibox/internal/platform/degradation"
 	"github.com/Black0Bag/minibox/internal/platform/fsutil"
 	httptransport "github.com/Black0Bag/minibox/internal/transport/http"
@@ -46,7 +48,7 @@ type App struct {
 	llm       llm.Provider   // Router（多供应商）
 	agent     *engine.Engine // Agent 引擎
 	memory    memory.Store   // 知识库
-	compiler  memory.Compiler
+	compiler  *storage.SQLiteCompiler
 	distiller memory.Distiller
 	assembler memory.Assembler
 	toolkit   *toolkit // 工具执行器（带权限链）
@@ -60,6 +62,7 @@ type App struct {
 	logme    *fsutil.Logme        // 足迹系统（B21）
 	monitor  *degradation.Monitor // 资源降级监控（B16）
 	backup   *backup.Manager      // 备份管理（B18）
+	upgrade  *upgrade.Manager     // 自升级（B19）
 
 	// 会话（对话端点用）
 	sessions *sessionHub
@@ -81,6 +84,11 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 		return nil, err
 	}
 	a.llm = router
+
+	// 蒸馏 LLM 提炼（B13：LLM 从内容提取结构化偏好）
+	if d, ok := a.distiller.(*storage.SQLiteDistiller); ok {
+		d.SetPrefExtractor(newPrefExtractor(router))
+	}
 
 	// 3. 工具注册表 + 内置工具 + 权限链 + 执行器
 	if err := a.buildTools(cfg); err != nil {
@@ -133,12 +141,29 @@ func (a *App) openDatabase(cfg config.Config) error {
 	store := storage.NewSQLiteStore(db, tok)
 	a.memory = store
 
-	// 编译管道 + 蒸馏 + 组装器（阶段 2.1 接 LLM 提炼）
+	// 编译管道 + 蒸馏 + 组装器（阶段 2.1 接 embedding）
 	a.compiler = storage.NewCompiler(db, store)
+	if cfg.Embedding.BaseURL != "" && cfg.Embedding.Model != "" {
+		ec := infrallm.NewEmbeddingClient(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Timeout)
+		a.compiler.SetEmbedder(&embedAdapter{client: ec, model: cfg.Embedding.Model})
+	}
 	a.distiller = storage.NewDistiller(db)
 	a.assembler = storage.NewAssembler(store)
 	return nil
 }
+
+// embedAdapter 把 EmbeddingClient 适配为 storage.Embedder。
+type embedAdapter struct {
+	client *infrallm.EmbeddingClient
+	model  string
+}
+
+// EmbedBatch 实现 storage.Embedder。
+func (ad *embedAdapter) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	return ad.client.EmbedBatch(ctx, ad.model, texts)
+}
+
+var _ storage.Embedder = (*embedAdapter)(nil)
 
 // buildLLMRouter 从配置构建多供应商 Router。
 func buildLLMRouter(cfg config.Config, logger *slog.Logger) (llm.Provider, error) {
@@ -233,7 +258,20 @@ func (a *App) buildSetup(cfg config.Config) error {
 	a.logme = fsutil.NewLogme(filepath.Join(dataDir, "logme"), 7*24*time.Hour)
 	a.monitor = degradation.NewMonitor()
 	a.backup = backup.NewManager(cfg.Database.Path, filepath.Join(dataDir, "backups"))
+	a.upgrade = upgrade.NewManager(binaryPath())
 	return nil
+}
+
+// Binary 返回当前二进制路径（自升级目标）。
+func (a *App) Binary() string { return binaryPath() }
+
+// bindPath 获取当前可执行文件路径。
+func binaryPath() string {
+	p, err := os.Executable()
+	if err != nil {
+		return "minibox"
+	}
+	return p
 }
 
 // taskRunner 调度任务执行器（接 Agent 引擎）。

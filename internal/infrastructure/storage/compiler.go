@@ -14,12 +14,21 @@ import (
 
 // SQLiteCompiler 编译管道实现（B12）。
 // 状态机：PENDING→PROCESSING→READY/FAILED，单调不后退（SmartSearch 实证）。
-// 当前骨架：异步提交 + 状态查询 + 死信重试框架。LLM 提炼/embedding 在 Phase 3 后续接入。
+// 流程：解析→切块→embedding（若配置）→入库（Store.Embed 写向量）。
+// embedding 不可用时降级纯文本入库（向量检索自动降级 FTS5→LIKE）。
 type SQLiteCompiler struct {
-	db    *sql.DB
-	store memory.Store
-	mu    sync.Mutex
-	jobs  map[string]*memory.CompileJob // 内存作业表（暂用，Phase 3 落表）
+	db       *sql.DB
+	store    memory.Store
+	mu       sync.Mutex
+	jobs     map[string]*memory.CompileJob // 内存作业表（暂用，Phase 3 落表）
+	embedder Embedder                      // 可选 embedding 客户端
+}
+
+// Embedder 文本向量化接口（组合根注入）。
+// 例：infrastructure/llm.EmbeddingClient + 模型名封装。
+type Embedder interface {
+	// EmbedBatch 批量生成向量（长度与 texts 对应）。
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
 
 // NewCompiler 创建编译管道。
@@ -29,6 +38,11 @@ func NewCompiler(db *sql.DB, store memory.Store) *SQLiteCompiler {
 		store: store,
 		jobs:  make(map[string]*memory.CompileJob),
 	}
+}
+
+// SetEmbedder 注入 embedding 客户端（阶段 2.1 接通向量检索）。
+func (c *SQLiteCompiler) SetEmbedder(e Embedder) {
+	c.embedder = e
 }
 
 // Compile 提交编译作业（异步）。
@@ -55,24 +69,102 @@ func (c *SQLiteCompiler) Compile(ctx context.Context, source string, opts memory
 }
 
 // process 后台处理编译作业（状态机推进）。
-// 当前：直接把 source 当文本写入 kb_store（占位），后续接 LLM 提炼+切块+embedding。
-// opts 当前未用，LLM 提炼阶段接入（Phase 3 后续）。
-func (c *SQLiteCompiler) process(ctx context.Context, jobID, source string, _ memory.CompileOptions) {
-	c.updateStatus(jobID, memory.JobProcessing, 0, 1, "")
+// 流程：切块 → 逐块入库 → embedding 可用时写入向量（Store.Embed）。
+func (c *SQLiteCompiler) process(ctx context.Context, jobID, source string, opts memory.CompileOptions) {
+	chunks := chunkSource(source, opts.MaxChunkTokens)
+	c.updateStatus(jobID, memory.JobProcessing, 0, len(chunks), "")
 
-	// 骨架：源文本直接入库（Phase 3 后续替换为完整管道）
-	err := c.store.Upsert(ctx, memory.Entry{
-		Content:    source,
-		Source:     source,
-		SourceHash: hashSource(source),
-		Importance: 0.5,
-	})
-	if err != nil {
-		c.updateStatus(jobID, memory.JobFailed, 0, 1, err.Error())
-		return
+	sourceHash := hashSource(source)
+
+	for i, chunk := range chunks {
+		// 入库（纯文本，向量降级可检索）
+		if err := c.store.Upsert(ctx, memory.Entry{
+			Content:    chunk,
+			Source:     source,
+			SourceHash: sourceHash,
+			Importance: 0.5,
+		}); err != nil {
+			c.updateStatus(jobID, memory.JobFailed, i, len(chunks), err.Error())
+			return
+		}
+
+		// 向量化：embedding 可用时写向量；不可用则跳过（检索自动降级）
+		if c.embedder != nil {
+			id, err := c.store.GetIDByHash(ctx, sourceHash)
+			if err == nil && id > 0 {
+				vecs, err := c.embedder.EmbedBatch(ctx, []string{chunk})
+				if err == nil && len(vecs) == 1 {
+					_ = c.store.Embed(ctx, id, memory.TierStore, vecs[0])
+				}
+			}
+		}
+
+		c.updateStatus(jobID, memory.JobProcessing, i+1, len(chunks), "")
 	}
 
-	c.updateStatus(jobID, memory.JobReady, 1, 1, "")
+	c.updateStatus(jobID, memory.JobReady, len(chunks), len(chunks), "")
+}
+
+// chunkSource 源文本切块（按 opts.MaxChunkTokens 估算，默认每块约 40 行）。
+func chunkSource(source string, maxTokens int) []string {
+	if maxTokens <= 0 {
+		maxTokens = 3000
+	}
+	// 简单实现：按段落切块（\n\n），再按长度合并（生产可换语义切块）
+	paragraphs := splitParagraphs(source)
+	var chunks []string
+	var current []string
+	currentLen := 0
+	for _, p := range paragraphs {
+		pLen := len(p) / 4 // 估算 token（中文约 4 字符/token 宽松）
+		if currentLen+pLen > maxTokens && len(current) > 0 {
+			chunks = append(chunks, joinChunk(current))
+			current = nil
+			currentLen = 0
+		}
+		current = append(current, p)
+		currentLen += pLen
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, joinChunk(current))
+	}
+	if len(chunks) == 0 {
+		chunks = []string{source}
+	}
+	return chunks
+}
+
+// splitParagraphs 按空行切段。
+func splitParagraphs(source string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(source); i++ {
+		if i > 0 && source[i] == '\n' && source[i-1] == '\n' {
+			if seg := source[start:i]; seg != "" {
+				out = append(out, seg)
+			}
+			start = i + 1
+		}
+	}
+	if seg := source[start:]; seg != "" {
+		out = append(out, seg)
+	}
+	if len(out) == 0 {
+		out = []string{source}
+	}
+	return out
+}
+
+// joinChunk 合并段落为一条 chunk。
+func joinChunk(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out += "\n\n" + p
+	}
+	return out
 }
 
 // GetJob 查询作业状态。

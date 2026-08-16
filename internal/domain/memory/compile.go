@@ -55,6 +55,12 @@ type Compiler interface {
 	Retry(ctx context.Context, id string) (*CompileJob, error)
 }
 
+// Vectorizer 向量化接口（app 装配进编译管道）。
+type Vectorizer interface {
+	// EmbedBatch 批量生成向量。
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+}
+
 // DistillOptions 蒸馏选项（B13）。
 type DistillOptions struct {
 	// MinEvidence 最小证据数。

@@ -74,6 +74,9 @@ type Store interface {
 	// dim 必须与 schema_meta.embedding_dim 一致，否则拒绝。
 	Embed(ctx context.Context, id int64, tier Tier, vec []float32) error
 
+	// GetIDByHash 通过 source_hash 查条目 ID（编译管道幂等摄入用）。
+	GetIDByHash(ctx context.Context, sourceHash string) (int64, error)
+
 	// RemoveEmbedding 删除某条目的向量（内容回滚/重建时）。
 	RemoveEmbedding(ctx context.Context, id int64, tier Tier) error
 }

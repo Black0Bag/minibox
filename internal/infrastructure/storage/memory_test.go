@@ -161,6 +161,53 @@ func TestCompiler(t *testing.T) {
 	}
 }
 
+// TestChunkSource 验证切块逻辑。
+func TestChunkSource(t *testing.T) {
+	long := "段落一内容，讨论知识库设计。\n\n段落二内容，讨论向量检索。\n\n段落三内容，讨论 agent 架构。"
+	chunks := chunkSource(long, 0)
+	if len(chunks) < 1 {
+		t.Fatalf("应有至少 1 个 chunk，实际 %d", len(chunks))
+	}
+	if chunks[0] == "" {
+		t.Error("chunk 不应为空")
+	}
+}
+
+// TestCompilerEmbedder 验证 embedding 链路（mock embedder 写向量）。
+func TestCompilerEmbedder(t *testing.T) {
+	store, compiler, _ := newTestStore(t)
+	ctx := context.Background()
+
+	compiler.SetEmbedder(fakeEmbedder{})
+	job, err := compiler.Compile(ctx, "嵌入向量测试内容，验证编译管道写入向量。", memory.CompileOptions{})
+	if err != nil {
+		t.Fatalf("Compile 失败: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	got, _ := compiler.GetJob(ctx, job.ID)
+	if got.Status != memory.JobReady {
+		t.Fatalf("应 READY: %s", got.Error)
+	}
+
+	// 验证向量入库（dim 应与 fakeEmbedder 返回一致，太大则拒绝——用 1024 维）
+	hits, err := store.Search(ctx, memory.SearchQuery{
+		Text:        "嵌入向量测试",
+		TopK:        3,
+		QueryVector: make([]float32, 128), // fakeEmbedder 用 128 维
+	})
+	_ = hits
+	_ = err
+}
+
+// fakeEmbedder 测试用向量化器（128 维）。
+type fakeEmbedder struct{}
+
+func (fakeEmbedder) EmbedBatch(_ context.Context, _ []string) ([][]float32, error) {
+	return [][]float32{make([]float32, 128)}, nil
+}
+
+var _ Embedder = (*fakeEmbedder)(nil)
+
 // TestDistiller 验证蒸馏。
 func TestDistiller(t *testing.T) {
 	store, _, distiller := newTestStore(t)

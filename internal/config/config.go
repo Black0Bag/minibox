@@ -15,11 +15,24 @@ import (
 // Config 是 minibox 后端根配置结构。
 // 所有配置通过 koanf 从默认值 + 配置文件合并而来。
 type Config struct {
-	Server   ServerConfig   `koanf:"server"`
-	Database DatabaseConfig `koanf:"database"`
-	Logging  LoggingConfig  `koanf:"logging"`
-	LLM      LLMConfig      `koanf:"llm"`
-	Memory   MemoryConfig   `koanf:"memory"`
+	Server    ServerConfig    `koanf:"server"`
+	Database  DatabaseConfig  `koanf:"database"`
+	Logging   LoggingConfig   `koanf:"logging"`
+	LLM       LLMConfig       `koanf:"llm"`
+	Memory    MemoryConfig    `koanf:"memory"`
+	Embedding EmbeddingConfig `koanf:"embedding"`
+}
+
+// EmbeddingConfig 向量化配置（模块 19）。
+type EmbeddingConfig struct {
+	// BaseURL OpenAI 兼容 /v1/embeddings 端点。
+	BaseURL string `koanf:"base_url"`
+	// APIKey 访问密钥。
+	APIKey string `koanf:"api_key"`
+	// Model 向量模型名（如 nvidia/llama-nemotron-embed-vl-1b-v2）。
+	Model string `koanf:"model"`
+	// Timeout 请求超时。
+	Timeout time.Duration `koanf:"timeout"`
 }
 
 // ServerConfig 服务端配置。
@@ -158,6 +171,9 @@ func Default() Config {
 		Memory: MemoryConfig{
 			CompileBatchSize: 32,
 			MaxTokens:        3000,
+		},
+		Embedding: EmbeddingConfig{
+			Timeout: 30 * time.Second,
 		},
 	}
 }
