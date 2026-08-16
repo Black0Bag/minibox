@@ -18,18 +18,24 @@ import (
 // OpenAICompat 是通用 OpenAI 兼容客户端。
 // 所有 OpenAI 兼容端点（/v1/chat/completions）都能用。
 type OpenAICompat struct {
-	name       string
-	baseURL    string
-	apiKeys    []string
-	httpClient *http.Client
+	name         string
+	baseURL      string
+	apiKeys      []string
+	httpClient   *http.Client
+	defaultModel string // 默认模型（req.Model 为空时回退，域契约"空=用默认"）
 }
 
 // OpenAICompatOption 配置选项。
 type OpenAICompatOption func(*OpenAICompat)
 
+// WithDefaultModel 设置默认模型（req.Model 为空时回退）。
+func WithDefaultModel(model string) OpenAICompatOption {
+	return func(c *OpenAICompat) { c.defaultModel = model }
+}
+
 // NewOpenAICompat 创建 OpenAI 兼容客户端。
-func NewOpenAICompat(name, baseURL string, apiKeys []string, timeout time.Duration) *OpenAICompat {
-	return &OpenAICompat{
+func NewOpenAICompat(name, baseURL string, apiKeys []string, timeout time.Duration, opts ...OpenAICompatOption) *OpenAICompat {
+	c := &OpenAICompat{
 		name:    name,
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		apiKeys: apiKeys,
@@ -37,6 +43,10 @@ func NewOpenAICompat(name, baseURL string, apiKeys []string, timeout time.Durati
 			Timeout: timeout,
 		},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // Name 返回供应商标识。
@@ -189,6 +199,11 @@ func (c *OpenAICompat) buildRequest(req llm.Request, stream bool) ([]byte, error
 		Temperature:     req.Temperature,
 		Tools:           tools,
 		ReasoningEffort: reasoningEffort,
+	}
+
+	// 默认模型回退：req.Model 为空时用供应商默认模型（域契约"空=用默认"）
+	if body.Model == "" && c.defaultModel != "" {
+		body.Model = c.defaultModel
 	}
 
 	return json.Marshal(body)

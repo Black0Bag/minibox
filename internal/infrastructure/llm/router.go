@@ -155,3 +155,23 @@ func (r *Router) Stream(ctx context.Context, req llm.Request) (<-chan llm.Stream
 	}
 	return nil, fmt.Errorf("所有 LLM 供应商流式都失败")
 }
+
+// Models 获取模型能力清单（转发到第一个可用供应商，能力识别 Q4A2）。
+func (r *Router) Models(ctx context.Context) ([]llm.ModelInfo, error) {
+	for _, entry := range r.entries {
+		if entry.breaker.State() == gobreaker.StateOpen {
+			continue
+		}
+		models, err := entry.Provider.Models(ctx)
+		if err == nil {
+			return models, nil
+		}
+		r.logger.Warn("LLM 模型列表供应商失败，尝试下一个", "provider", entry.Name, "err", err)
+	}
+	return nil, fmt.Errorf("所有 LLM 供应商模型列表都失败")
+}
+
+// Name 返回路由器标识（domain/llm.Provider 接口要求）。
+func (r *Router) Name() string {
+	return "router"
+}

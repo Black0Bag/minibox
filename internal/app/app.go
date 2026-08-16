@@ -5,15 +5,27 @@ package app
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/domain/agent"
+	"github.com/Black0Bag/minibox/internal/domain/llm"
+	"github.com/Black0Bag/minibox/internal/domain/memory"
+	"github.com/Black0Bag/minibox/internal/domain/permission"
 	"github.com/Black0Bag/minibox/internal/domain/scheduler"
 	"github.com/Black0Bag/minibox/internal/domain/setup"
 	"github.com/Black0Bag/minibox/internal/domain/tools"
 	"github.com/Black0Bag/minibox/internal/domain/worldbook"
+	"github.com/Black0Bag/minibox/internal/infrastructure/engine"
+	infrallm "github.com/Black0Bag/minibox/internal/infrastructure/llm"
 	infrasched "github.com/Black0Bag/minibox/internal/infrastructure/scheduler"
+	"github.com/Black0Bag/minibox/internal/infrastructure/storage"
+	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
+	"github.com/Black0Bag/minibox/internal/platform/fsutil"
 	httptransport "github.com/Black0Bag/minibox/internal/transport/http"
 	ssetransport "github.com/Black0Bag/minibox/internal/transport/sse"
 	wstransport "github.com/Black0Bag/minibox/internal/transport/ws"
@@ -21,123 +33,236 @@ import (
 
 // App 是应用根对象，持有所有装配好的依赖。
 type App struct {
-	cfg     config.Config
-	logger  *slog.Logger
-	http    *httptransport.Server
-	sse     *ssetransport.Server
-	ws      *wstransport.Server
-	toolReg *tools.Registry
-	// Phase 7 装配：调度中枢 / 世界书 / 角色卡 / 首启向导
+	cfg    config.Config
+	logger *slog.Logger
+	db     *sql.DB
+	http   *httptransport.Server
+	sse    *ssetransport.Server
+	ws     *wstransport.Server
+
+	// 域依赖（阶段 1.1 端到端装配）
+	llm       llm.Provider   // Router（多供应商）
+	agent     *engine.Engine // Agent 引擎
+	memory    memory.Store   // 知识库
+	compiler  memory.Compiler
+	distiller memory.Distiller
+	assembler memory.Assembler
+	toolkit   *toolkit // 工具执行器（带权限链）
+
+	// Phase 7 装配
 	wz       *setup.Wizard
 	cred     *setup.DeviceCredential
 	guard    *setup.PathGuard
 	wbLoader *worldbook.Loader
 	cron     *infrasched.CronScheduler
-}
 
-// taskRunner 调度任务执行器（Phase 7 占位：Agent 引擎联动在 Phase 8 跨模块装配）。
-type taskRunner struct {
-	logger *slog.Logger
-}
-
-// Run 占位执行：记录触发，等待 Phase 8 接入 Agent 引擎。
-func (r *taskRunner) Run(_ context.Context, task scheduler.Task) (string, int, error) {
-	r.logger.Info("调度任务触发（执行器占位）", "task", task.ID, "type", string(task.Type), "spec", task.Spec)
-	return "占位执行（Phase 8 接入 Agent 引擎）", 0, nil
+	// 会话（对话端点用）
+	sessions *sessionHub
 }
 
 // New 创建 App，装配所有依赖。
-// 传输层（Phase 6）在组合根装配：HTTP/SSE/WS 三通道共用统一信封。
 func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
-	// 工具注册表（Phase 5 模块27，供 /tools 端点）
-	reg := tools.NewRegistry()
+	a := &App{cfg: cfg, logger: logger}
 
-	// Phase 7 装配：首启向导 + 设备凭据 + 敏感路径拦截
-	dataDir := filepath.Dir(cfg.Database.Path) // 与数据库同目录
-	wz := setup.New(setup.NewFileStore(filepath.Join(dataDir, "setup.json")))
-	guard := setup.DefaultPathGuard()
+	// 1. 数据库 + 知识库存储
+	if err := a.openDatabase(cfg); err != nil {
+		return nil, err
+	}
 
-	// 设备凭据：首次启动自动生成（0600），WS 设备通道握手用
-	cred, err := setup.LoadOrCreate(filepath.Join(dataDir, "device.cred"))
+	// 2. LLM 供应商 → Router
+	router, err := buildLLMRouter(cfg, logger)
 	if err != nil {
-		logger.Warn("设备凭据初始化失败", "err", err)
+		_ = a.db.Close()
+		return nil, err
 	}
-	_ = cred // 握手鉴权在 Phase 8 联动
+	a.llm = router
 
-	// 调度中枢（模块35）与世界书装载器（模块36）
-	cron := infrasched.New(&taskRunner{logger: logger}, logger)
-	wbLoader := worldbook.New(worldbook.Hooks{})
-
-	a := &App{
-		cfg:      cfg,
-		logger:   logger,
-		toolReg:  reg,
-		http:     httptransport.New(cfg.Server, logger, reg),
-		sse:      ssetransport.New(logger),
-		ws:       wstransport.New(logger),
-		wz:       wz,
-		cred:     cred,
-		guard:    guard,
-		wbLoader: wbLoader,
-		cron:     cron,
+	// 3. 工具注册表 + 内置工具 + 权限链 + 执行器
+	if err := a.buildTools(cfg); err != nil {
+		_ = a.db.Close()
+		return nil, err
 	}
+
+	// 4. Agent 引擎 + 记忆门
+	a.buildAgent()
+
+	// 5. 传输层（三通道）
+	a.http = httptransport.New(cfg.Server, logger, a.toolReg())
+	a.sse = ssetransport.New(logger)
+	a.ws = wstransport.New(logger)
+	a.mountREST(a.http.Router()) // 阶段 1.2：挂全量 REST 业务端点
+
+	// 阶段 1.3：三通道独立路由组（SSE 事件流 / WS 设备通道）
+	a.http.Router().Mount("/api/v1/stream", a.sse.Handler())
+	a.http.Router().Mount("/device/ws", a.ws.Handler())
+
+	// 6. Phase 7 装配：首启向导 + 设备凭据 + 敏感路径 + 世界书 + 调度
+	if err := a.buildSetup(cfg); err != nil {
+		_ = a.db.Close()
+		return nil, err
+	}
+
+	// 7. 会话 hub（对话端点）+ SSE 事件流推送
+	a.sessions = newSessionHub(a.agent, a.compiler)
+	a.sessions.SetPublisher(func(sessionID, typ string, data any) {
+		_ = a.sse.Publish(sessionID, "agent", typ, data)
+	})
+
 	return a, nil
 }
 
-// Config 返回应用配置。
-func (a *App) Config() config.Config {
-	return a.cfg
+// openDatabase 打开 SQLite + 知识库存储 + 编译管道。
+func (a *App) openDatabase(cfg config.Config) error {
+	db, err := storage.Open(cfg.Database)
+	if err != nil {
+		return err
+	}
+	a.db = db
+
+	tok, err := storage.NewJiebaTokenizer()
+	if err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	store := storage.NewSQLiteStore(db, tok)
+	a.memory = store
+
+	// 编译管道 + 蒸馏 + 组装器（阶段 2.1 接 LLM 提炼）
+	a.compiler = storage.NewCompiler(db, store)
+	a.distiller = storage.NewDistiller(db)
+	a.assembler = storage.NewAssembler(store)
+	return nil
 }
 
-// Logger 返回应用日志器。
-func (a *App) Logger() *slog.Logger {
-	return a.logger
+// buildLLMRouter 从配置构建多供应商 Router。
+func buildLLMRouter(cfg config.Config, logger *slog.Logger) (llm.Provider, error) {
+	if len(cfg.LLM.Providers) == 0 {
+		return nil, errors.New("LLM 配置缺 providers")
+	}
+	entries := make([]*infrallm.ProviderEntry, 0, len(cfg.LLM.Providers))
+	for _, p := range cfg.LLM.Providers {
+		timeout := p.Timeout
+		if timeout <= 0 {
+			timeout = cfg.LLM.Timeout // 供应商未配时用全局超时
+		}
+		if timeout <= 0 {
+			timeout = 120 * time.Second // 兜底
+		}
+		client := infrallm.NewOpenAICompat(p.Name, p.BaseURL, p.APIKeys, timeout,
+			infrallm.WithDefaultModel(cfg.LLM.DefaultModel))
+		entries = append(entries, infrallm.NewProviderEntry(client, p.Name))
+	}
+	return infrallm.NewRouter(entries, infrallm.RouterConfig{}, logger), nil
 }
 
-// ToolRegistry 返回工具注册表（供 Phase 5 装配内置工具）。
-func (a *App) ToolRegistry() *tools.Registry {
-	return a.toolReg
+// buildTools 装配工具注册表 + 内置工具 + 权限链 + 执行器。
+func (a *App) buildTools(cfg config.Config) error {
+	reg := tools.NewRegistry()
+
+	// 内置文件工具（路径沙箱：root = 项目运行目录）
+	validator := fsutil.NewPathValidator(cfg.Database.Path, cfg.Database.Path)
+	for _, t := range []tools.Tool{
+		infratools.NewReadFile(validator),
+		infratools.NewWriteFile(validator),
+		infratools.NewListDir(validator),
+		infratools.NewSearchFiles(validator),
+	} {
+		if err := reg.Register(t); err != nil {
+			return err
+		}
+	}
+
+	// 权限链（Phase 5 模块 30：禁止表 → 模式 → 元数据 → 批准 → 参数校验）
+	chain := permission.NewChain(
+		permission.NewForbiddenPolicy(),
+		permission.NewModePolicy(),
+		permission.NewMetadataPolicy(),
+		permission.NewApprovalRequiredPolicy(),
+		permission.NewArgsValidationPolicy(),
+	)
+
+	a.toolkit = &toolkit{reg: reg, policy: chain}
+	return nil
 }
 
-// SSE 返回 SSE 传输服务器（供 B14 主动推送）。
-func (a *App) SSE() *ssetransport.Server {
-	return a.sse
+// toolReg 返回工具注册表（供 /tools 端点）。
+func (a *App) toolReg() *tools.Registry {
+	if a.toolkit == nil {
+		return tools.NewRegistry()
+	}
+	return a.toolkit.reg
 }
 
-// WS 返回 WebSocket 传输服务器（供设备代理）。
-func (a *App) WS() *wstransport.Server {
-	return a.ws
+// buildAgent 装配 Agent 引擎 + 强制记忆门。
+func (a *App) buildAgent() {
+	eng := engine.NewEngine(a.llm, a.toolkit, agent.Config{
+		MaxSteps:      agent.MaxSteps,
+		MaxTokens:     100000,
+		Mode:          agent.ModePlan,
+		RequirePlan:   true,
+		ToolOutputCap: 8000,
+	}, a.logger)
+
+	// 强制记忆门（记忆中心化红线）
+	if a.memory != nil {
+		eng.SetMemoryGate(engine.NewMemoryGate(a.memory))
+	}
+	a.agent = eng
 }
 
-// Wizard 返回首次启动向导（供传输层锁定/向导端点联动）。
-func (a *App) Wizard() *setup.Wizard {
-	return a.wz
+// buildSetup Phase 7 装配：向导 + 凭据 + 敏感路径 + 世界书 + 调度。
+func (a *App) buildSetup(cfg config.Config) error {
+	dataDir := filepath.Dir(cfg.Database.Path)
+	a.wz = setup.New(setup.NewFileStore(filepath.Join(dataDir, "setup.json")))
+	a.guard = setup.DefaultPathGuard()
+
+	cred, err := setup.LoadOrCreate(filepath.Join(dataDir, "device.cred"))
+	if err != nil {
+		a.logger.Warn("设备凭据初始化失败", "err", err)
+	}
+	a.cred = cred
+
+	a.wbLoader = worldbook.New(worldbook.Hooks{})
+	a.cron = infrasched.New(&taskRunner{agent: a.agent, logger: a.logger}, a.logger)
+	return nil
 }
 
-// DeviceCredential 返回设备凭据（供 WS 握手鉴权）。
-func (a *App) DeviceCredential() *setup.DeviceCredential {
-	return a.cred
+// taskRunner 调度任务执行器（接 Agent 引擎）。
+type taskRunner struct {
+	agent  *engine.Engine
+	logger *slog.Logger
 }
 
-// PathGuard 返回敏感路径拦截器（供只读工具联动）。
-func (a *App) PathGuard() *setup.PathGuard {
-	return a.guard
-}
-
-// WorldbookLoader 返回世界书装载器。
-func (a *App) WorldbookLoader() *worldbook.Loader {
-	return a.wbLoader
-}
-
-// Cron 返回调度中枢。
-func (a *App) Cron() *infrasched.CronScheduler {
-	return a.cron
+// Run 调度触发 → 启动一次 agent 运行（Plan 模式，禁写工具）。
+func (r *taskRunner) Run(ctx context.Context, task scheduler.Task) (string, int, error) {
+	if r.agent == nil {
+		r.logger.Info("调度任务触发（无 agent 引擎）", "task", task.ID)
+		return "", 0, nil
+	}
+	run, err := r.agent.Start(ctx, agent.Request{
+		SessionID: "scheduled_" + task.ID,
+		Message:   task.Prompt,
+		Mode:      agent.ModePlan,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	// 推进状态机直到 done/failed（受预算约束）
+	for run.State == agent.StatePlanning || run.State == agent.StateActing {
+		run, err = r.agent.Step(ctx, run.ID)
+		if err != nil {
+			return "", run.TokensSpent, err
+		}
+		if run.State == agent.StateAwaitingApproval {
+			run, _ = r.agent.Approve(ctx, run.ID, false)
+		}
+	}
+	return run.Answer, run.TokensSpent, nil
 }
 
 // Run 启动应用。
-// 当前：仅启动 HTTP 传输层（REST + SSE + WS 共用一个端口）。
 func (a *App) Run(ctx context.Context) error {
-	// 首启向导锁定：未完成前提示，运输层端点按需放行（Phase 8 联动）
 	if need, err := a.wz.NeedWizard(); err != nil {
 		a.logger.Warn("向导状态读取失败", "err", err)
 	} else if need {
@@ -147,11 +272,11 @@ func (a *App) Run(ctx context.Context) error {
 	a.logger.Info("minibox 启动",
 		"port", a.cfg.Server.Port,
 		"listen", a.cfg.Server.Listen,
+		"llm_provider", a.cfg.LLM.DefaultProvider,
 	)
 
 	errCh := make(chan error, 1)
 	go func() {
-		// HTTP 服务（内部 mount REST 路由；SSE/WS 独立路由组可后续挂载）
 		if err := a.http.Start(); err != nil {
 			errCh <- err
 		}
@@ -170,5 +295,64 @@ func (a *App) Close() error {
 	a.logger.Info("minibox 关闭")
 	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Server.ShutdownTimeout)
 	defer cancel()
-	return a.http.Shutdown(ctx)
+	if a.http != nil {
+		if err := a.http.Shutdown(ctx); err != nil {
+			return err
+		}
+	}
+	if a.cron != nil {
+		a.cron.Stop()
+	}
+	if a.db != nil {
+		return a.db.Close()
+	}
+	return nil
 }
+
+// Config 返回应用配置。
+func (a *App) Config() config.Config { return a.cfg }
+
+// Logger 返回应用日志器。
+func (a *App) Logger() *slog.Logger { return a.logger }
+
+// ToolRegistry 返回工具注册表（供 /tools 端点）。
+func (a *App) ToolRegistry() *tools.Registry { return a.toolReg() }
+
+// LLM 返回 LLM 供应商（Router）。
+func (a *App) LLM() llm.Provider { return a.llm }
+
+// Agent 返回 Agent 引擎。
+func (a *App) Agent() *engine.Engine { return a.agent }
+
+// Memory 返回知识库。
+func (a *App) Memory() memory.Store { return a.memory }
+
+// Compiler 返回编译管道。
+func (a *App) Compiler() memory.Compiler { return a.compiler }
+
+// Distiller 返回蒸馏器。
+func (a *App) Distiller() memory.Distiller { return a.distiller }
+
+// Assembler 返回上下文组装器。
+func (a *App) Assembler() memory.Assembler { return a.assembler }
+
+// SSE 返回 SSE 传输服务器。
+func (a *App) SSE() *ssetransport.Server { return a.sse }
+
+// WS 返回 WebSocket 传输服务器。
+func (a *App) WS() *wstransport.Server { return a.ws }
+
+// Wizard 返回首次启动向导。
+func (a *App) Wizard() *setup.Wizard { return a.wz }
+
+// DeviceCredential 返回设备凭据。
+func (a *App) DeviceCredential() *setup.DeviceCredential { return a.cred }
+
+// PathGuard 返回敏感路径拦截器。
+func (a *App) PathGuard() *setup.PathGuard { return a.guard }
+
+// WorldbookLoader 返回世界书装载器。
+func (a *App) WorldbookLoader() *worldbook.Loader { return a.wbLoader }
+
+// Cron 返回调度中枢。
+func (a *App) Cron() *infrasched.CronScheduler { return a.cron }

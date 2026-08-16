@@ -90,6 +90,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.router.ServeHTTP(w, r)
 }
 
+// Router 返回 chi 路由（供组合根挂载业务端点）。
+func (s *Server) Router() chi.Router {
+	return s.router
+}
+
 // Start 启动 HTTP 监听（阻塞，支持优雅关闭）。
 func (s *Server) Start() error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.Listen, s.cfg.Port)
