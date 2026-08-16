@@ -3,6 +3,8 @@
 run:
   timeout: 5m
   tests: true
+  # 显式声明 Go 语言版本，避免 golangci-lint 自身构建版本(go1.24)低于 go.mod 目标(1.26.x)导致配置加载失败
+  go: "1.26"
 
 linters:
   enable:
