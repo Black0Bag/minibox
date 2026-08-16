@@ -1,12 +1,13 @@
-# golangci-lint 配置
+# golangci-lint 配置（v2 格式）
 # minibox 后端静态检查规则
+version: "2"
+
 run:
   timeout: 5m
   tests: true
-  # 显式声明 Go 语言版本，避免 golangci-lint 自身构建版本(go1.24)低于 go.mod 目标(1.26.x)导致配置加载失败
-  go: "1.26"
 
 linters:
+  default: none
   enable:
     - govet
     - errcheck
@@ -16,6 +17,3 @@ linters:
     - revive
     - misspell
     - gocritic
-
-issues:
-  exclude-use-default: false
