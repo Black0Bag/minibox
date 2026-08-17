@@ -96,6 +96,9 @@ type LLMConfig struct {
 	Timeout time.Duration `koanf:"timeout"`
 	// MaxRetries 重试次数。
 	MaxRetries int `koanf:"max_retries"`
+	// FeatureModels 功能级模型独立配置（B6）。
+	// 每个功能（agent/pref_extract/subagent）可独立配置使用的 provider 和 model。
+	FeatureModels []FeatureModelConfig `koanf:"feature_models"`
 }
 
 // ProviderConfig 单个 LLM 供应商配置。
@@ -128,6 +131,16 @@ type ModelConfig struct {
 	RPM int `koanf:"rpm"`
 	// TPM 每分钟 token 限流。
 	TPM int `koanf:"tpm"`
+}
+
+// FeatureModelConfig 功能级模型配置（B6）。
+type FeatureModelConfig struct {
+	// Feature 功能标识（agent / pref_extract / subagent）。
+	Feature string `koanf:"feature"`
+	// Provider 供应商标识（空=使用默认）。
+	Provider string `koanf:"provider"`
+	// Model 模型 ID（空=使用默认）。
+	Model string `koanf:"model"`
 }
 
 // MemoryConfig 知识库/记忆配置（Phase 3 使用，先占位）。

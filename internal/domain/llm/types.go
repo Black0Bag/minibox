@@ -3,7 +3,10 @@
 // 不绑死任何模型，支持任意 OpenAI 兼容端点（deepseek/glm/nemotron/ollama 等）。
 package llm
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Provider 是 LLM 供应商统一接口。
 // 实现：infrastructure/llm 下的 OpenAI 兼容客户端等。
@@ -77,6 +80,7 @@ type FunctionDef struct {
 // Request 生成请求。
 type Request struct {
 	Model       string
+	Feature     Feature       // B6 功能标识（如 "agent"/"pref_extract"/"subagent"），Router 据此选择模型
 	Messages    []Message
 	Thinking    ThinkingLevel
 	Tools       []ToolDef
@@ -134,6 +138,56 @@ type StreamEvent struct {
 	Usage        *Usage    // Done 时
 	FinishReason string    // Done 时
 	Err          error     // Error 时
+}
+
+// Feature 功能标识（B6 功能级模型独立配置）。
+type Feature string
+
+const (
+	// FeatureAgent 对话/Agent 引擎。
+	FeatureAgent Feature = "agent"
+	// FeaturePrefExtract 偏好蒸馏。
+	FeaturePrefExtract Feature = "pref_extract"
+	// FeatureSubagent 子代理。
+	FeatureSubagent Feature = "subagent"
+)
+
+// FeatureConfig 单个功能→模型映射（B6）。
+type FeatureConfig struct {
+	Feature  Feature `json:"feature"`  // 功能标识
+	Provider string  `json:"provider"` // 供应商标识（空=使用默认）
+	Model    string  `json:"model"`    // 模型ID（空=使用默认）
+}
+
+// Validate 校验功能配置是否合法。
+func (fc FeatureConfig) Validate() error {
+	switch fc.Feature {
+	case FeatureAgent, FeaturePrefExtract, FeatureSubagent:
+		return nil
+	default:
+		return fmt.Errorf("未知功能标识: %s", fc.Feature)
+	}
+}
+
+// FeatureModels 功能级模型配置集合。
+type FeatureModels struct {
+	Configs map[Feature]FeatureConfig `json:"configs"`
+}
+
+// Get 获取指定功能的模型配置，不存在时返回空 FeatureConfig（使用默认）。
+func (fm *FeatureModels) Get(feature Feature) FeatureConfig {
+	if fm == nil || fm.Configs == nil {
+		return FeatureConfig{}
+	}
+	return fm.Configs[feature]
+}
+
+// Set 设置指定功能的模型配置。
+func (fm *FeatureModels) Set(fc FeatureConfig) {
+	if fm.Configs == nil {
+		fm.Configs = make(map[Feature]FeatureConfig)
+	}
+	fm.Configs[fc.Feature] = fc
 }
 
 // ModelInfo 模型能力信息（能力识别结果，Q4A2）。

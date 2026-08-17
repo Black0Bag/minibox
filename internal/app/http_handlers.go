@@ -9,7 +9,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/domain/llm"
 	"github.com/Black0Bag/minibox/internal/domain/memory"
+	"github.com/Black0Bag/minibox/internal/domain/permission"
+	"github.com/Black0Bag/minibox/internal/domain/tools"
+	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
 	"github.com/Black0Bag/minibox/internal/domain/scheduler"
 	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
 	"github.com/Black0Bag/minibox/internal/transport"
@@ -37,6 +42,9 @@ func (a *App) mountREST(r chi.Router) {
 		r.Post("/compile", a.handleKBCompile)
 		r.Get("/compile/{job_id}", a.handleKBCompileJob)
 		r.Post("/distill", a.handleKBDistill)
+		r.Get("/snapshots", a.handleKBSnapshotsList)
+		r.Post("/snapshots", a.handleKBSnapshotCreate)
+		r.Post("/rollback", a.handleKBRollback)
 	})
 
 	// LLM 域
@@ -44,6 +52,8 @@ func (a *App) mountREST(r chi.Router) {
 		r.Get("/providers", a.handleLLMProviders)
 		r.Get("/models", a.handleLLMModels)
 		r.Post("/models/refresh", a.handleLLMModelsRefresh)
+		r.Get("/feature-models", a.handleLLMFeatureModels)
+		r.Patch("/feature-models", a.handleLLMUpdateFeatureModels)
 	})
 
 	// 调度域
@@ -67,9 +77,26 @@ func (a *App) mountREST(r chi.Router) {
 		r.Post("/apply", a.handleUpgradeApply)
 	})
 
+	// 健康检查（Kubernetes 探针规范：liveness 轻量，readiness 含依赖检查）
+	r.Get("/api/v1/health", a.handleHealth)
+	r.Get("/api/v1/ready", a.handleReady)
+
+	// 工具域
+	r.Route("/api/v1/tools", func(r chi.Router) {
+		r.Get("/", a.handleToolList)
+		r.Post("/acquire", a.handleToolAcquire)
+	})
+
+	// 权限域
+	r.Route("/api/v1/permissions", func(r chi.Router) {
+		r.Get("/", a.handlePermissionsGet)
+		r.Patch("/mode", a.handlePermissionsMode)
+	})
+
 	// 状态/配置
 	r.Get("/api/v1/server/status", a.handleServerStatus)
 	r.Get("/api/v1/config", a.handleConfig)
+	r.Patch("/api/v1/config", a.handleConfigUpdate)
 }
 
 // respondJSON 写统一信封。
@@ -315,6 +342,69 @@ func (a *App) handleKBCompileJob(w http.ResponseWriter, r *http.Request) {
 	a.respondOK(w, r, "api.kb.compile.get", job)
 }
 
+// handleKBSnapshotsList 列出知识库快照。
+func (a *App) handleKBSnapshotsList(w http.ResponseWriter, r *http.Request) {
+	if a.backup == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "backup_unavailable", "备份未就绪")
+		return
+	}
+	list, err := a.backup.List()
+	if err != nil {
+		a.respondErr(w, r, http.StatusInternalServerError, "backup_list_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.kb.snapshots.list", map[string]any{
+		"count":     len(list),
+		"snapshots": list,
+	})
+}
+
+// handleKBSnapshotCreate 创建知识库快照（VACUUM INTO）。
+func (a *App) handleKBSnapshotCreate(w http.ResponseWriter, r *http.Request) {
+	if a.backup == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "backup_unavailable", "备份未就绪")
+		return
+	}
+	path, err := a.backup.Snapshot()
+	if err != nil {
+		a.respondErr(w, r, http.StatusInternalServerError, "snapshot_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.kb.snapshots.create", map[string]string{
+		"path":   path,
+		"status": "ok",
+	})
+}
+
+// handleKBRollback 从快照回滚知识库。
+// 注意：回滚需重启服务使新数据库生效，当前返回 202 Accepted。
+func (a *App) handleKBRollback(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Snapshot string `json:"snapshot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "invalid_json", "请求体解析失败: "+err.Error())
+		return
+	}
+	if req.Snapshot == "" {
+		a.respondErr(w, r, http.StatusBadRequest, "missing_snapshot", "snapshot 字段必填")
+		return
+	}
+	if a.backup == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "backup_unavailable", "备份未就绪")
+		return
+	}
+	if err := a.backup.Restore(req.Snapshot); err != nil {
+		a.respondErr(w, r, http.StatusInternalServerError, "rollback_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.kb.rollback", map[string]string{
+		"snapshot": req.Snapshot,
+		"status":   "ok",
+		"note":     "数据库已替换，建议重启服务使新数据库生效",
+	})
+}
+
 // handleKBDistill 执行蒸馏。
 func (a *App) handleKBDistill(w http.ResponseWriter, r *http.Request) {
 	res, err := a.distiller.Distill(r.Context(), memory.DistillOptions{})
@@ -356,6 +446,39 @@ func (a *App) handleLLMModels(w http.ResponseWriter, r *http.Request) {
 // handleLLMModelsRefresh 刷新模型列表。
 func (a *App) handleLLMModelsRefresh(w http.ResponseWriter, r *http.Request) {
 	a.handleLLMModels(w, r)
+}
+
+// handleLLMFeatureModels 获取功能级模型配置（B6）。
+func (a *App) handleLLMFeatureModels(w http.ResponseWriter, r *http.Request) {
+	models := a.FeatureModels()
+	if models == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "feature_models_unavailable", "FeatureRouter 未就绪")
+		return
+	}
+	a.respondOK(w, r, "api.llm.feature_models", models)
+}
+
+// handleLLMUpdateFeatureModels 更新功能级模型配置（B6）。
+func (a *App) handleLLMUpdateFeatureModels(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Configs []llm.FeatureConfig `json:"configs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "invalid_json", "请求体解析失败: "+err.Error())
+		return
+	}
+
+	models := &llm.FeatureModels{Configs: make(map[llm.Feature]llm.FeatureConfig)}
+	for _, fc := range req.Configs {
+		if err := fc.Validate(); err != nil {
+			a.respondErr(w, r, http.StatusBadRequest, "invalid_feature_config", err.Error())
+			return
+		}
+		models.Set(fc)
+	}
+
+	a.UpdateFeatureModels(models)
+	a.respondOK(w, r, "api.llm.feature_models.updated", models)
 }
 
 // --- 调度域 ---
@@ -431,6 +554,47 @@ func (a *App) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleConfigUpdate 更新配置（运行时热重载可更新项）。
+func (a *App) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Logging  *config.LoggingConfig  `json:"logging,omitempty"`
+		LLM      *struct {
+			DefaultModel string `json:"default_model,omitempty"`
+		} `json:"llm,omitempty"`
+		Server   *struct {
+			Port int `json:"port,omitempty"`
+		} `json:"server,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "invalid_json", "请求体解析失败: "+err.Error())
+		return
+	}
+
+	// 深拷贝当前配置，只更新允许的字段
+	cfg := a.cfg
+	if req.Logging != nil {
+		if req.Logging.Level != "" {
+			cfg.Logging.Level = req.Logging.Level
+		}
+		if req.Logging.Format != "" {
+			cfg.Logging.Format = req.Logging.Format
+		}
+	}
+	if req.LLM != nil && req.LLM.DefaultModel != "" {
+		cfg.LLM.DefaultModel = req.LLM.DefaultModel
+	}
+	if req.Server != nil && req.Server.Port > 0 {
+		cfg.Server.Port = req.Server.Port
+	}
+
+	a.UpdateConfig(cfg)
+	a.respondOK(w, r, "api.config.updated", map[string]any{
+		"server_port":      cfg.Server.Port,
+		"default_model":    cfg.LLM.DefaultModel,
+		"log_level":        cfg.Logging.Level,
+	})
+}
+
 // handleConfig 配置摘要（隐藏密钥）。
 func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 	a.respondOK(w, r, "api.config.get", map[string]any{
@@ -439,6 +603,138 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"db_path":          a.cfg.Database.Path,
 		"default_provider": a.cfg.LLM.DefaultProvider,
 		"default_model":    a.cfg.LLM.DefaultModel,
+	})
+}
+
+// handleHealth 存活检查（liveness probe）。
+// 纯进程级：只要服务在运行就返回 200，不依赖任何外部资源。
+// 设计：Kubernetes 规范——liveness 不应检查依赖，否则误判重启。
+func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
+	a.respondOK(w, r, "api.health", map[string]any{
+		"status": "ok",
+		"uptime": time.Since(a.startTime).String(),
+	})
+}
+
+// handleReady 就绪检查（readiness probe）。
+// 验证所有核心依赖是否就绪：DB 连接 / LLM 配置 / 向导完成。
+// 设计：Kubernetes 规范——readiness 检查依赖，失败时停止流量。
+func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
+	checks := map[string]any{}
+
+	// 数据库连接检查
+	dbOK := false
+	if a.db != nil {
+		if err := a.db.PingContext(r.Context()); err == nil {
+			dbOK = true
+		}
+	}
+	checks["database"] = dbOK
+
+	// LLM 配置检查
+	llmOK := len(a.cfg.LLM.Providers) > 0
+	checks["llm"] = llmOK
+
+	// 首次启动向导检查（NeedWizard=false 表示已完成）
+	wizardDone := true
+	if a.wz != nil {
+		need, err := a.wz.NeedWizard()
+		if err != nil || need {
+			wizardDone = false
+		}
+	}
+	checks["wizard"] = wizardDone
+
+	allOK := dbOK && llmOK && wizardDone
+	if allOK {
+		a.respondOK(w, r, "api.ready", map[string]any{
+			"status": "ok",
+			"checks": checks,
+		})
+	} else {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "not_ready", "服务未就绪")
+	}
+}
+
+// handleToolList 列出所有已注册工具（含元数据 + JSON Schema）。
+// 供前端展示工具清单、调试、审计。
+func (a *App) handleToolList(w http.ResponseWriter, r *http.Request) {
+	reg := a.toolReg()
+	list := reg.List()
+	type toolView struct {
+		Name        string            `json:"name"`
+		Description string            `json:"description"`
+		Metadata    tools.Metadata    `json:"metadata"`
+		JSONSchema  json.RawMessage   `json:"json_schema"`
+	}
+	views := make([]toolView, 0, len(list))
+	for _, t := range list {
+		views = append(views, toolView{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Metadata:    t.Metadata(),
+			JSONSchema:  t.JSONSchema(),
+		})
+	}
+	a.respondOK(w, r, "api.tools.list", map[string]any{
+		"count": len(views),
+		"tools": views,
+	})
+}
+
+// handlePermissionsGet 获取当前权限配置。
+func (a *App) handlePermissionsGet(w http.ResponseWriter, r *http.Request) {
+	a.respondOK(w, r, "api.permissions.get", map[string]any{
+		"mode": a.PermissionMode(),
+		"modes": []permission.Mode{
+			permission.ModeYolo,
+			permission.ModeAcceptEdits,
+			permission.ModeAsk,
+			permission.ModePlan,
+		},
+	})
+}
+
+// handlePermissionsMode 更新权限模式（运行时动态切换）。
+func (a *App) handlePermissionsMode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Mode permission.Mode `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "invalid_json", "请求体解析失败: "+err.Error())
+		return
+	}
+	switch req.Mode {
+	case permission.ModeYolo, permission.ModeAcceptEdits, permission.ModeAsk, permission.ModePlan:
+		a.SetPermissionMode(req.Mode)
+		a.respondOK(w, r, "api.permissions.mode.updated", map[string]permission.Mode{
+			"mode": req.Mode,
+		})
+	default:
+		a.respondErr(w, r, http.StatusBadRequest, "invalid_mode", "无效权限模式: "+string(req.Mode))
+	}
+}
+
+// handleToolAcquire 触发 B8 工具自动获取。
+// 根据 spec 下载外部工具二进制（SHA-256 校验 + 隔离目录）。
+func (a *App) handleToolAcquire(w http.ResponseWriter, r *http.Request) {
+	var spec infratools.ToolSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "invalid_json", "请求体解析失败: "+err.Error())
+		return
+	}
+	if spec.Name == "" || spec.URL == "" || spec.SHA256 == "" {
+		a.respondErr(w, r, http.StatusBadRequest, "missing_fields", "name/url/sha256 必填")
+		return
+	}
+	res, err := a.AcquireTool(r.Context(), spec)
+	if err != nil {
+		a.respondErr(w, r, http.StatusInternalServerError, "acquire_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.tools.acquire", map[string]any{
+		"path":      res.Path,
+		"installed": res.Installed,
 	})
 }
 

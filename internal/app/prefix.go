@@ -32,6 +32,7 @@ func newPrefExtractor(p llm.Provider) *prefExtractor {
 // Extract 实现 storage.PrefExtractor。
 func (e *prefExtractor) Extract(ctx context.Context, content string) ([]memory.Preference, error) {
 	resp, err := e.llm.Complete(ctx, llm.Request{
+		Feature:  llm.FeaturePrefExtract, // B6 偏好蒸馏使用独立模型
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: e.prompt},
 			{Role: llm.RoleUser, Content: content},

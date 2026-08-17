@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -39,6 +40,7 @@ import (
 type App struct {
 	cfg    config.Config
 	logger *slog.Logger
+	startTime time.Time // 启动时间（健康检查 uptime）
 	db     *sql.DB
 	http   *httptransport.Server
 	sse    *ssetransport.Server
@@ -61,6 +63,7 @@ type App struct {
 	wbLoader *worldbook.Loader
 	cron     *infrasched.CronScheduler
 	logme    *fsutil.Logme        // 足迹系统（B21）
+	acq      *infratools.Acquirer  // B8 工具自动获取器
 	monitor  *degradation.Monitor // 资源降级监控（B16）
 	backup   *backup.Manager      // 备份管理（B18）
 	upgrade  *upgrade.Manager     // 自升级（B19）
@@ -71,7 +74,7 @@ type App struct {
 
 // New 创建 App，装配所有依赖。
 func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
-	a := &App{cfg: cfg, logger: logger}
+	a := &App{cfg: cfg, logger: logger, startTime: time.Now()}
 
 	// 1. 数据库 + 知识库存储
 	if err := a.openDatabase(cfg); err != nil {
@@ -179,7 +182,7 @@ func (ad *embedAdapter) EmbedQuery(ctx context.Context, text string) ([]float32,
 
 var _ storage.Embedder = (*embedAdapter)(nil)
 
-// buildLLMRouter 从配置构建多供应商 Router。
+// buildLLMRouter 从配置构建多供应商 Router + 功能级模型配置（B6）。
 func buildLLMRouter(cfg config.Config, logger *slog.Logger) (llm.Provider, error) {
 	if len(cfg.LLM.Providers) == 0 {
 		return nil, errors.New("LLM 配置缺 providers")
@@ -197,7 +200,25 @@ func buildLLMRouter(cfg config.Config, logger *slog.Logger) (llm.Provider, error
 			infrallm.WithDefaultModel(cfg.LLM.DefaultModel))
 		entries = append(entries, infrallm.NewProviderEntry(client, p.Name))
 	}
-	return infrallm.NewRouter(entries, infrallm.RouterConfig{}, logger), nil
+
+	// 构建底层 Router
+	router := infrallm.NewRouter(entries, infrallm.RouterConfig{}, logger)
+
+	// 构建功能级模型配置（B6）
+	featureModels := &llm.FeatureModels{Configs: make(map[llm.Feature]llm.FeatureConfig)}
+	for _, fm := range cfg.LLM.FeatureModels {
+		fc := llm.FeatureConfig{
+			Feature:  llm.Feature(fm.Feature),
+			Provider: fm.Provider,
+			Model:    fm.Model,
+		}
+		if err := fc.Validate(); err == nil {
+			featureModels.Set(fc)
+		}
+	}
+
+	// 包装为 FeatureRouter
+	return infrallm.NewFeatureRouter(router, featureModels, logger), nil
 }
 
 // buildTools 装配工具注册表 + 内置工具 + 权限链 + 执行器。
@@ -277,6 +298,7 @@ func (a *App) buildSetup(cfg config.Config) error {
 	a.wbLoader = worldbook.New(worldbook.Hooks{})
 	a.cron = infrasched.New(&taskRunner{agent: a.agent, logger: a.logger}, a.logger)
 	a.logme = fsutil.NewLogme(filepath.Join(dataDir, "logme"), 7*24*time.Hour)
+	a.acq = infratools.NewAcquirer(filepath.Join(dataDir, "tools"), 60*time.Second)
 	a.monitor = degradation.NewMonitor()
 	a.backup = backup.NewManager(cfg.Database.Path, filepath.Join(dataDir, "backups"))
 	a.upgrade = upgrade.NewManager(binaryPath())
@@ -387,6 +409,51 @@ func (a *App) ToolRegistry() *tools.Registry { return a.toolReg() }
 
 // LLM 返回 LLM 供应商（Router）。
 func (a *App) LLM() llm.Provider { return a.llm }
+
+// AcquireTool 获取外部工具（B8）。委托给 infrastructure/tools.Acquirer。
+func (a *App) AcquireTool(ctx context.Context, spec infratools.ToolSpec) (*infratools.AcquireResult, error) {
+	if a.acq == nil {
+		return nil, fmt.Errorf("工具获取器未就绪")
+	}
+	return a.acq.Acquire(ctx, spec)
+}
+
+// UpdateConfig 运行时更新配置（供 PATCH /api/v1/config 端点调用）。
+// 当前仅更新可热重载的配置项（日志级别、默认模型等）。
+// 设计：替换整个 cfg 结构体，确保原子性。
+func (a *App) UpdateConfig(cfg config.Config) {
+	a.cfg = cfg
+}
+
+// PermissionMode 返回当前权限模式。
+func (a *App) PermissionMode() permission.Mode {
+	if a.toolkit == nil {
+		return permission.ModePlan
+	}
+	return a.toolkit.Mode()
+}
+
+// SetPermissionMode 设置当前权限模式。
+func (a *App) SetPermissionMode(m permission.Mode) {
+	if a.toolkit != nil {
+		a.toolkit.SetMode(m)
+	}
+}
+
+// FeatureModels 返回当前功能级模型配置（B6），供 REST 端点读写。
+func (a *App) FeatureModels() *llm.FeatureModels {
+	if fr, ok := a.llm.(*infrallm.FeatureRouter); ok {
+		return fr.FeatureModels()
+	}
+	return nil
+}
+
+// UpdateFeatureModels 运行时更新功能级模型配置（B6），供 REST 端点写入。
+func (a *App) UpdateFeatureModels(models *llm.FeatureModels) {
+	if fr, ok := a.llm.(*infrallm.FeatureRouter); ok {
+		fr.UpdateModels(models)
+	}
+}
 
 // Agent 返回 Agent 引擎。
 func (a *App) Agent() *engine.Engine { return a.agent }

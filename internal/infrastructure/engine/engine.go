@@ -126,7 +126,8 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 	}
 
 	resp, err := e.llm.Complete(ctx, llm.Request{
-		Model:    "", // 用默认模型
+		Feature:  llm.FeatureAgent, // B6 对话/Agent 引擎使用独立模型
+		Model:    "",               // 用默认模型（FeatureRouter 按配置替换）
 		Messages: messages,
 		Tools:    e.toolsSchema(),
 	})

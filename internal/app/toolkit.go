@@ -19,6 +19,20 @@ import (
 type toolkit struct {
 	reg    *tools.Registry
 	policy *permission.PolicyChain
+	mode   permission.Mode // 当前权限模式（可运行时更新）
+}
+
+// Mode 返回当前权限模式。
+func (t *toolkit) Mode() permission.Mode {
+	if t.mode == "" {
+		return permission.ModePlan
+	}
+	return t.mode
+}
+
+// SetMode 设置当前权限模式（运行时动态切换）。
+func (t *toolkit) SetMode(m permission.Mode) {
+	t.mode = m
 }
 
 // Execute 执行工具调用（走权限链门控 + SafeInvoke 防御性包装）。
@@ -33,7 +47,7 @@ func (t *toolkit) Execute(ctx context.Context, call llm.ToolCall) (string, error
 		decision, reason, err := t.policy.Check(ctx, permission.Request{
 			ToolName: call.Name,
 			Metadata: tool.Metadata(),
-			Mode:     permission.ModePlan, // Agent 默认 Plan 模式：只读放行，写需 plan
+			Mode:     t.Mode(), // 使用动态模式（可运行时切换）
 		})
 		if err != nil {
 			return "", fmt.Errorf("权限检查失败: %w", err)
