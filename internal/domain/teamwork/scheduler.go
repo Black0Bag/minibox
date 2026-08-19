@@ -46,7 +46,7 @@ type Scheduler struct {
 // NewScheduler 创建调度中枢。
 func NewScheduler(catalog *TeamCatalog, hr *HRAssistant) *Scheduler {
 	if catalog == nil {
-		catalog = presetTeams()
+		catalog = NewTeamCatalog()
 	}
 	if hr == nil {
 		hr = NewHRAssistant(nil)
