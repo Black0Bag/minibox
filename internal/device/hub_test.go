@@ -29,7 +29,7 @@ func testHub(t *testing.T) (*Hub, *websocket.Conn) {
 		for {
 			var req WSMessage
 			if err := wsjson.Read(r.Context(), conn, &req); err != nil {
-				conn.Close(websocket.StatusNormalClosure, "bye")
+				_ = conn.Close(websocket.StatusNormalClosure, "bye")
 				return
 			}
 			resp := map[string]any{
@@ -49,7 +49,7 @@ func testHub(t *testing.T) (*Hub, *websocket.Conn) {
 	if err != nil {
 		t.Fatalf("Dial 失败: %v", err)
 	}
-	t.Cleanup(func() { conn.Close(websocket.StatusNormalClosure, "test done") })
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "test done") })
 
 	return h, conn
 }
@@ -168,7 +168,7 @@ func TestHub_SendCommand_设备错误响应(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial 失败: %v", err)
 	}
-	t.Cleanup(func() { conn.Close(websocket.StatusNormalClosure, "done") })
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "done") })
 
 	if _, err := h.HandleConnect(ctx, conn, "dev-1", "Pixel 8", "14", nil, nil); err != nil {
 		t.Fatalf("HandleConnect 失败: %v", err)

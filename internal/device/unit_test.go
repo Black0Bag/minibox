@@ -130,8 +130,11 @@ func TestAuditLogger_记录与列表(t *testing.T) {
 	if len(logs) != 2 {
 		t.Fatalf("应有 2 条日志，得到 %d", len(logs))
 	}
-	if logs[0] != cmd1 || logs[1] != cmd2 {
-		t.Fatal("日志顺序或指针不符")
+	if logs[0].ID != cmd1.ID || logs[0].Method != cmd1.Method || logs[0].Status != cmd1.Status {
+		t.Fatal("日志顺序或内容不符")
+	}
+	if logs[1].ID != cmd2.ID || logs[1].Method != cmd2.Method || logs[1].Status != cmd2.Status {
+		t.Fatal("日志顺序或内容不符")
 	}
 
 	// 列表拷贝不共享底层

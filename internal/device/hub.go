@@ -24,7 +24,7 @@ type Hub struct {
 	manager  *PairingManager
 	guard    *guardrails.Guard
 	logger   *slog.Logger
-	cmdID    int64
+
 }
 
 // NewHub 创建设备网关。
@@ -41,7 +41,7 @@ func NewHub(logger *slog.Logger) *Hub {
 }
 
 // HandleConnect 设备连接握手（D-02/D-08）。
-func (h *Hub) HandleConnect(ctx context.Context, conn *websocket.Conn, deviceID, model, android string, caps []string, perms map[string]bool) (*Device, error) {
+func (h *Hub) HandleConnect(_ context.Context, conn *websocket.Conn, deviceID, model, android string, caps []string, perms map[string]bool) (*Device, error) {
 	dev := &Device{
 		ID:           deviceID,
 		Model:        model,

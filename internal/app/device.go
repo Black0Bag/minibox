@@ -51,7 +51,7 @@ func (a *App) handleDeviceConnect(ctx context.Context, c *wstransport.Client, pa
 	return map[string]any{"ok": true, "device_id": dev.ID}, nil
 }
 
-func (a *App) handleDeviceDisconnect(ctx context.Context, c *wstransport.Client) (any, error) {
+func (a *App) handleDeviceDisconnect(_ context.Context, c *wstransport.Client) (any, error) {
 	if dev, ok := c.Data.(*device.Device); ok {
 		a.hub.HandleDisconnect(dev.ID)
 	}
@@ -78,7 +78,7 @@ func (a *App) handleDeviceHello(ctx context.Context, c *wstransport.Client, para
 	return map[string]any{"ok": true, "device_id": dev.ID}, nil
 }
 
-func (a *App) handleDeviceEvent(ctx context.Context, c *wstransport.Client, params json.RawMessage) (any, error) {
+func (a *App) handleDeviceEvent(_ context.Context, _ *wstransport.Client, params json.RawMessage) (any, error) {
 	var evt device.Event
 	if err := json.Unmarshal(params, &evt); err != nil {
 		return nil, nil

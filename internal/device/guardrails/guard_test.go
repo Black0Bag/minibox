@@ -68,7 +68,7 @@ func TestCheck_敏感操作未配置HITL返回Ask(t *testing.T) {
 
 func TestCheck_HITL放行与拒绝(t *testing.T) {
 	g := New()
-	g.SetHITL(func(ctx context.Context, action Action) (bool, error) {
+	g.SetHITL(func(_ context.Context, _ Action) (bool, error) {
 		return true, nil
 	})
 	decision, _, err := g.Check(context.Background(), Action{DeviceID: "d1", Method: "设备_输入文字"})
@@ -79,7 +79,7 @@ func TestCheck_HITL放行与拒绝(t *testing.T) {
 		t.Fatalf("HITL 放行后应 Allow，得到 %s", decision)
 	}
 
-	g.SetHITL(func(ctx context.Context, action Action) (bool, error) {
+	g.SetHITL(func(_ context.Context, _ Action) (bool, error) {
 		return false, nil
 	})
 	decision, reason, err := g.Check(context.Background(), Action{DeviceID: "d1", Method: "设备_输入文字"})
@@ -96,7 +96,7 @@ func TestCheck_HITL放行与拒绝(t *testing.T) {
 
 func TestCheck_HITL错误返回Deny(t *testing.T) {
 	g := New()
-	g.SetHITL(func(ctx context.Context, action Action) (bool, error) {
+	g.SetHITL(func(_ context.Context, _ Action) (bool, error) {
 		return false, errors.New("确认服务不可用")
 	})
 	decision, _, err := g.Check(context.Background(), Action{DeviceID: "d1", Method: "设备_输入文字"})

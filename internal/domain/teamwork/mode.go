@@ -61,10 +61,3 @@ func (l Level) Valid() bool {
 	return l >= Level1 && l <= MaxLevel
 }
 
-// child 返回子层级（超上限返回 0 表示不可再生）。
-func (l Level) child() Level {
-	if !l.CanSpawn() {
-		return 0
-	}
-	return l + 1
-}

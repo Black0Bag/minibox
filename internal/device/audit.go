@@ -1,6 +1,7 @@
 package device
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -23,12 +24,22 @@ func (al *AuditLogger) Log(cmd *Command) {
 	al.mu.Unlock()
 }
 
-// List 列出审计日志。
+// List 列出审计日志（深拷贝，防止调用方篡改内部记录）。
 func (al *AuditLogger) List() []*Command {
 	al.mu.RLock()
 	defer al.mu.RUnlock()
 	out := make([]*Command, len(al.logs))
-	copy(out, al.logs)
+	for i, cmd := range al.logs {
+		cp := *cmd
+		if cmd.Params != nil {
+			cp.Params = append(json.RawMessage(nil), cmd.Params...)
+		}
+		if cmd.Result != nil {
+			r := *cmd.Result
+			cp.Result = &r
+		}
+		out[i] = &cp
+	}
 	return out
 }
 

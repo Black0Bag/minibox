@@ -51,7 +51,9 @@ func TestDiscussionMaxRounds(t *testing.T) {
 
 func TestDiscussionConcludeAndDrift(t *testing.T) {
 	d := NewDiscussion("帮我写一个登录接口", "lead")
-	d.SubmitProposal("a", "用 JWT")
+	if _, err := d.SubmitProposal("a", "用 JWT"); err != nil {
+		t.Fatalf("提交提案失败: %v", err)
+	}
 	if err := d.Conclude("采用 JWT 方案实现登录接口"); err != nil {
 		t.Fatalf("裁决失败: %v", err)
 	}
@@ -66,7 +68,7 @@ func TestDiscussionConcludeAndDrift(t *testing.T) {
 
 func TestDiscussionDriftDetection(t *testing.T) {
 	d := NewDiscussion("帮我写一个登录接口", "lead")
-	d.Conclude("我们改做会员积分系统") // 完全跑题
+	_ = d.Conclude("我们改做会员积分系统") // 完全跑题
 	if drift := d.DriftCheck(); drift == "" {
 		t.Fatal("跑题裁决应被检测到偏移")
 	}

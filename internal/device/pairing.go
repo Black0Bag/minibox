@@ -34,7 +34,7 @@ func (pm *PairingManager) GenerateCode(deviceID string) (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("生成配对码失败: %w", err)
 	}
-	code := fmt.Sprintf("%06d", int(b[0])<<16|int(b[1])<<8|int(b[2])%1000000)
+	code := fmt.Sprintf("%06d", (int(b[0])<<16|int(b[1])<<8|int(b[2]))%1000000)
 
 	pm.mu.Lock()
 	entry := pairingEntry{

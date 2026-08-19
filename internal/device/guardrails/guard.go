@@ -21,9 +21,12 @@ type Action struct {
 type Decision string
 
 const (
+	// Allow 允许执行。
 	Allow Decision = "allow"
-	Ask   Decision = "ask"
-	Deny  Decision = "deny"
+	// Ask 需要人工确认。
+	Ask Decision = "ask"
+	// Deny 拒绝执行。
+	Deny Decision = "deny"
 )
 
 // DangerRule 危险动作规则。

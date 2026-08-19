@@ -127,7 +127,7 @@ func (m *mockProvider) Complete(_ context.Context, req llm.Request) (*llm.Respon
 	}, nil
 }
 
-func (m *mockProvider) Stream(_ context.Context, req llm.Request) (<-chan llm.StreamEvent, error) {
+func (m *mockProvider) Stream(_ context.Context, _ llm.Request) (<-chan llm.StreamEvent, error) {
 	ch := make(chan llm.StreamEvent)
 	close(ch)
 	return ch, nil

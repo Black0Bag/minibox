@@ -321,7 +321,7 @@ func (a *App) buildSetup(cfg config.Config) error {
 	a.cred = cred
 
 	a.wbLoader = worldbook.New(worldbook.Hooks{
-		OnCharacterCard: func(p *worldbook.Profile, cardPath string) error {
+		OnCharacterCard: func(_ *worldbook.Profile, cardPath string) error {
 			card, err := charactercard.ParseFile(cardPath)
 			if err != nil {
 				a.logger.Warn("角色卡加载失败", "path", cardPath, "err", err)
@@ -345,7 +345,7 @@ func (a *App) buildSetup(cfg config.Config) error {
 
 	// 设备代理网关（D-01）
 	a.hub = device.NewHub(a.logger)
-	a.hub.Guard().SetHITL(func(ctx context.Context, action guardrails.Action) (bool, error) {
+	a.hub.Guard().SetHITL(func(_ context.Context, action guardrails.Action) (bool, error) {
 		// HITL 确认：发布审批请求到 SSE 事件流，等待前端确认。
 		// 当前无前端接入，fail-closed 拒绝（D-13 危险操作逐次确认）。
 		a.logger.Warn("设备危险操作待确认", "device", action.DeviceID, "method", action.Method)

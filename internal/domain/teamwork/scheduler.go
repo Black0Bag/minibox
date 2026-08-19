@@ -56,7 +56,7 @@ func NewScheduler(catalog *TeamCatalog, hr *HRAssistant) *Scheduler {
 
 // TriageTask 前台分诊（只分诊，不执行）。
 // 设计：需求明确 → 推荐 1 团队 + 简短理由；需求模糊 → 2-3 备选 + 各附理由。
-func (s *Scheduler) TriageTask(ctx context.Context, need string) (*Triage, error) {
+func (s *Scheduler) TriageTask(_ context.Context, need string) (*Triage, error) {
 	if need == "" {
 		return nil, fmt.Errorf("需求为空")
 	}
@@ -106,7 +106,7 @@ func teamKeywordScore(team Team, need string) int {
 }
 
 // StartProject 启动项目模式：创建讨论 + 依赖检测。
-func (s *Scheduler) StartProject(ctx context.Context, question string, leadID string, tasks []TaskDependency) (*DispatchOutcome, error) {
+func (s *Scheduler) StartProject(_ context.Context, question string, leadID string, tasks []TaskDependency) (*DispatchOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

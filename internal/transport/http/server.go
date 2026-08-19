@@ -110,15 +110,6 @@ func respondJSON(w http.ResponseWriter, status int, env *transport.Envelope) {
 	_ = json.NewEncoder(w).Encode(env)
 }
 
-// respondEnvelope 根据 handler 结果封装成信封响应。
-func (s *Server) respondEnvelope(w http.ResponseWriter, r *http.Request, typ string, data any) {
-	env, err := transport.NewEnvelope("system", r.URL.Path, typ, data)
-	if err != nil {
-		http.Error(w, "信封封装失败", http.StatusInternalServerError)
-		return
-	}
-	respondJSON(w, http.StatusOK, env)
-}
 
 // respondError 写 RFC 7807 错误信封（REST 错误路径专用）。
 func respondError(w http.ResponseWriter, status int, typ, title, detail, instance string) {
