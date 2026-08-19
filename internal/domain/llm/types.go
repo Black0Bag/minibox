@@ -150,6 +150,18 @@ const (
 	FeaturePrefExtract Feature = "pref_extract"
 	// FeatureSubagent 子代理。
 	FeatureSubagent Feature = "subagent"
+	// FeatureMemoryCompile 记忆编译/压缩/总结。
+	FeatureMemoryCompile Feature = "memory_compile"
+	// FeatureMemoryEmbed 记忆嵌入（向量化）。
+	FeatureMemoryEmbed Feature = "memory_embed"
+	// FeatureSoulGenerate 灵魂文件生成。
+	FeatureSoulGenerate Feature = "soul_generate"
+	// FeatureProfileAnalyze 用户画像分析。
+	FeatureProfileAnalyze Feature = "profile_analyze"
+	// FeatureToolDecision 工具决策（选哪个工具）。
+	FeatureToolDecision Feature = "tool_decision"
+	// FeatureKnowledgeCompile 知识编译。
+	FeatureKnowledgeCompile Feature = "knowledge_compile"
 )
 
 // FeatureConfig 单个功能→模型映射（B6）。
@@ -162,7 +174,9 @@ type FeatureConfig struct {
 // Validate 校验功能配置是否合法。
 func (fc FeatureConfig) Validate() error {
 	switch fc.Feature {
-	case FeatureAgent, FeaturePrefExtract, FeatureSubagent:
+	case FeatureAgent, FeaturePrefExtract, FeatureSubagent,
+		FeatureMemoryCompile, FeatureMemoryEmbed, FeatureSoulGenerate,
+		FeatureProfileAnalyze, FeatureToolDecision, FeatureKnowledgeCompile:
 		return nil
 	default:
 		return fmt.Errorf("未知功能标识: %s", fc.Feature)

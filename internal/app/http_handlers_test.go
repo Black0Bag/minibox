@@ -14,6 +14,7 @@ import (
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/domain/permission"
 	"github.com/Black0Bag/minibox/internal/domain/tools"
+	"github.com/Black0Bag/minibox/internal/platform/degradation"
 )
 
 // mockApp 创建最小化 App 用于 HTTP 测试
@@ -22,6 +23,7 @@ func mockApp() *App {
 		cfg:       config.Default(),
 		startTime: mustParseTime("2026-08-17T12:00:00Z"),
 		toolkit:   &toolkit{reg: tools.NewRegistry(), mode: permission.ModePlan},
+		monitor:   degradation.NewMonitor(),
 	}
 }
 

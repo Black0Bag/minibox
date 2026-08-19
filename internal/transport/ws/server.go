@@ -51,15 +51,16 @@ type rpcError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-// client 已连接客户端（设备/前端）。
-type client struct {
-	id        string
-	name      string
-	handshake bool
+// Client 已连接客户端（设备/前端）。
+type Client struct {
+	ID        string
+	Name      string
+	Handshake bool
+	Data      any // 附加数据（设备信息等）
 }
 
 // HandlerFunc 处理一个 method 请求。
-type HandlerFunc func(ctx context.Context, c *client, params json.RawMessage) (any, error)
+type HandlerFunc func(ctx context.Context, c *Client, params json.RawMessage) (any, error)
 
 // Server WebSocket 传输层服务器。
 type Server struct {
@@ -68,7 +69,10 @@ type Server struct {
 	routes map[string]HandlerFunc
 	// 已连接客户端：connID → client（map 并发访问需锁，golang-concurrency）
 	mu      sync.RWMutex
-	clients map[*websocket.Conn]*client
+	clients map[*websocket.Conn]*Client
+	// CredentialCheck 可选凭据校验函数，非 nil 时 connect 必须传入有效 token。
+	// 签名：candidate token → 是否有效（与 setup.DeviceCredential.Verify 匹配）。
+	CredentialCheck func(candidate string) bool
 }
 
 // New 创建 WS 服务器。
@@ -76,7 +80,7 @@ func New(logger *slog.Logger) *Server {
 	return &Server{
 		logger:  logger,
 		routes:  make(map[string]HandlerFunc),
-		clients: make(map[*websocket.Conn]*client),
+		clients: make(map[*websocket.Conn]*Client),
 	}
 }
 
@@ -94,7 +98,7 @@ func (s *Server) Handler() http.HandlerFunc {
 			s.logger.Warn("WS 握手失败", "err", err)
 			return
 		}
-		cli := &client{}
+		cli := &Client{}
 		s.mu.Lock()
 		s.clients[c] = cli
 		s.mu.Unlock()
@@ -121,7 +125,7 @@ func (s *Server) Handler() http.HandlerFunc {
 
 // dispatch 分发一条 JSON-RPC 消息。
 // 请求（有 id）→ 必须回 response；通知（无 id）→ 不回。
-func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, cli *client, req request) {
+func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, cli *Client, req request) {
 	// 内置 method：connect/disconnect 不需要握手
 	switch req.Method {
 	case "connect":
@@ -136,7 +140,7 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, cli *client
 	}
 
 	// 其他 method 需先握手（QC3）
-	if !cli.handshake {
+	if !cli.Handshake {
 		s.replyError(ctx, conn, req, codeHandshakeRequired, "handshake_required", nil)
 		return
 	}
@@ -184,7 +188,7 @@ func isNotification(req request) bool {
 }
 
 // handleConnect 握手。
-func (s *Server) handleConnect(ctx context.Context, conn *websocket.Conn, cli *client, req request) {
+func (s *Server) handleConnect(ctx context.Context, conn *websocket.Conn, cli *Client, req request) {
 	var params struct {
 		Client   string `json:"client"`
 		Protocol string `json:"protocol"`
@@ -197,15 +201,19 @@ func (s *Server) handleConnect(ctx context.Context, conn *websocket.Conn, cli *c
 		s.replyError(ctx, conn, req, codeAuthFailed, "unsupported protocol", nil)
 		return
 	}
-	cli.handshake = true
-	cli.id = params.Client
-	cli.name = params.Client
+	if s.CredentialCheck != nil && !s.CredentialCheck(params.Auth) {
+		s.replyError(ctx, conn, req, codeAuthFailed, "invalid credential", nil)
+		return
+	}
+	cli.Handshake = true
+	cli.ID = params.Client
+	cli.Name = params.Client
 	s.reply(ctx, conn, req, map[string]any{"ok": true, "protocol": "1.0"})
 }
 
 // handleDisconnect 断开。
-func (s *Server) handleDisconnect(ctx context.Context, conn *websocket.Conn, cli *client, req request) {
-	cli.handshake = false
+func (s *Server) handleDisconnect(ctx context.Context, conn *websocket.Conn, cli *Client, req request) {
+	cli.Handshake = false
 	s.reply(ctx, conn, req, map[string]any{"ok": true})
 	_ = conn.Close(websocket.StatusNormalClosure, "bye")
 }

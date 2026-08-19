@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -56,23 +55,6 @@ func (s *Server) buildRouter() chi.Router {
 	// golang-security 实证）；默认绑 127.0.0.1 单用户，无需透传客户端 IP。
 	// 信封在 handler 层封装（respondEnvelope），不用全局缓冲中间件——
 	// 缓冲会破坏流式/大响应（golang-code-style + SSE 红线：独立路由组）。
-
-	// 健康检查（无需认证，对外）
-	r.Get("/api/v1/health", s.handleHealth)
-	r.Get("/api/v1/ready", s.handleReady)
-
-	// 配置
-	r.Route("/api/v1/config", func(r chi.Router) {
-		r.Get("/", s.handleGetConfig)
-	})
-
-	// 工具
-	r.Route("/api/v1/tools", func(r chi.Router) {
-		r.Get("/", s.handleListTools)
-	})
-
-	// 服务器状态
-	r.Get("/api/v1/server/status", s.handleServerStatus)
 
 	// 404/405 处理（统一信封 RFC 7807 错误）
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -150,30 +132,8 @@ func respondError(w http.ResponseWriter, status int, typ, title, detail, instanc
 	respondJSON(w, status, env)
 }
 
-// 下方为各端点处理器
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	s.respondEnvelope(w, r, "api.health", map[string]string{"status": "ok"})
-}
-
-func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
-	s.respondEnvelope(w, r, "api.ready", map[string]bool{"ready": true})
-}
-
-func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	s.respondEnvelope(w, r, "api.config.get", map[string]string{"note": "配置端点（Phase 6 骨架）"})
-}
-
-func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
-	names := []string{}
-	if s.toolReg != nil {
-		names = s.toolReg.Names()
-	}
-	s.respondEnvelope(w, r, "api.tools.list", map[string]any{"tools": names})
-}
-
-func (s *Server) handleServerStatus(w http.ResponseWriter, r *http.Request) {
-	s.respondEnvelope(w, r, "api.server.status", map[string]any{
-		"uptime": time.Now().Unix(),
-		"note":   "服务器状态（Phase 6 骨架）",
-	})
-}
+// 下方为各端点处理器（已迁移至 app/http_handlers.go，此处保留空）
+// 健康检查 → app.handleHealth / app.handleReady
+// 配置 → app.handleConfig / app.handleConfigUpdate
+// 工具 → app.handleToolList / app.handleToolAcquire
+// 状态 → app.handleServerStatus

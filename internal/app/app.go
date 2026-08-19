@@ -6,6 +6,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,8 +19,10 @@ import (
 	"github.com/Black0Bag/minibox/internal/domain/llm"
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 	"github.com/Black0Bag/minibox/internal/domain/permission"
+	"github.com/Black0Bag/minibox/internal/domain/charactercard"
 	"github.com/Black0Bag/minibox/internal/domain/scheduler"
 	"github.com/Black0Bag/minibox/internal/domain/setup"
+	"github.com/Black0Bag/minibox/internal/domain/subagent"
 	"github.com/Black0Bag/minibox/internal/domain/tools"
 	"github.com/Black0Bag/minibox/internal/domain/worldbook"
 	"github.com/Black0Bag/minibox/internal/infrastructure/backup"
@@ -31,6 +34,8 @@ import (
 	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
 	"github.com/Black0Bag/minibox/internal/platform/degradation"
 	"github.com/Black0Bag/minibox/internal/platform/fsutil"
+	"github.com/Black0Bag/minibox/internal/device"
+	"github.com/Black0Bag/minibox/internal/device/guardrails"
 	httptransport "github.com/Black0Bag/minibox/internal/transport/http"
 	ssetransport "github.com/Black0Bag/minibox/internal/transport/sse"
 	wstransport "github.com/Black0Bag/minibox/internal/transport/ws"
@@ -64,9 +69,11 @@ type App struct {
 	cron     *infrasched.CronScheduler
 	logme    *fsutil.Logme        // 足迹系统（B21）
 	acq      *infratools.Acquirer  // B8 工具自动获取器
+	orch     *engine.Orchestrator // subagent 调度器（B7）
 	monitor  *degradation.Monitor // 资源降级监控（B16）
 	backup   *backup.Manager      // 备份管理（B18）
 	upgrade  *upgrade.Manager     // 自升级（B19）
+	hub      *device.Hub          // 设备代理网关（D-01）
 
 	// 会话（对话端点用）
 	sessions *sessionHub
@@ -89,6 +96,15 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	}
 	a.llm = router
 
+	// 2.5 系统配置持久化（B6 功能级模型配置写入 DB）
+	if a.db != nil {
+		cfgStore := storage.NewSystemConfigStore(a.db)
+		if fr, ok := router.(*infrallm.FeatureRouter); ok {
+			fr.SetStore(cfgStore)
+			_ = fr.LoadFromStore() // 从 DB 恢复配置，失败不阻断启动
+		}
+	}
+
 	// 蒸馏 LLM 提炼（B13：LLM 从内容提取结构化偏好）
 	if d, ok := a.distiller.(*storage.SQLiteDistiller); ok {
 		d.SetPrefExtractor(newPrefExtractor(router))
@@ -108,6 +124,7 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	a.sse = ssetransport.New(logger)
 	a.ws = wstransport.New(logger)
 	a.mountREST(a.http.Router()) // 阶段 1.2：挂全量 REST 业务端点
+	a.mountDeviceREST(a.http.Router()) // 设备代理 REST 端点（D-11）
 
 	// 阶段 1.3：三通道独立路由组（SSE 事件流 / WS 设备通道）
 	a.http.Router().Mount("/api/v1/stream", a.sse.Handler())
@@ -117,6 +134,13 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	if err := a.buildSetup(cfg); err != nil {
 		_ = a.db.Close()
 		return nil, err
+	}
+
+	// 6.5 WS 凭据校验
+	if a.cred != nil {
+		a.ws.CredentialCheck = func(candidate string) bool {
+			return a.cred.Verify(candidate)
+		}
 	}
 
 	// 7. 会话 hub（对话端点）+ SSE 事件流推送
@@ -218,7 +242,8 @@ func buildLLMRouter(cfg config.Config, logger *slog.Logger) (llm.Provider, error
 	}
 
 	// 包装为 FeatureRouter
-	return infrallm.NewFeatureRouter(router, featureModels, logger), nil
+	fr := infrallm.NewFeatureRouter(router, featureModels, logger)
+	return fr, nil
 }
 
 // buildTools 装配工具注册表 + 内置工具 + 权限链 + 执行器。
@@ -295,13 +320,41 @@ func (a *App) buildSetup(cfg config.Config) error {
 	}
 	a.cred = cred
 
-	a.wbLoader = worldbook.New(worldbook.Hooks{})
+	a.wbLoader = worldbook.New(worldbook.Hooks{
+		OnCharacterCard: func(p *worldbook.Profile, cardPath string) error {
+			card, err := charactercard.ParseFile(cardPath)
+			if err != nil {
+				a.logger.Warn("角色卡加载失败", "path", cardPath, "err", err)
+				return nil
+			}
+			a.logger.Info("角色卡已加载", "name", card.DisplayName(), "path", cardPath)
+			return nil
+		},
+	})
+	a.orch = engine.NewOrchestrator(subagent.Config{
+		MaxConcurrent: 4,
+		AgentTimeout:  5 * time.Minute,
+		TokenBudget:   100000,
+	}, a.logger)
 	a.cron = infrasched.New(&taskRunner{agent: a.agent, logger: a.logger}, a.logger)
 	a.logme = fsutil.NewLogme(filepath.Join(dataDir, "logme"), 7*24*time.Hour)
 	a.acq = infratools.NewAcquirer(filepath.Join(dataDir, "tools"), 60*time.Second)
 	a.monitor = degradation.NewMonitor()
 	a.backup = backup.NewManager(cfg.Database.Path, filepath.Join(dataDir, "backups"))
 	a.upgrade = upgrade.NewManager(binaryPath())
+
+	// 设备代理网关（D-01）
+	a.hub = device.NewHub(a.logger)
+	a.hub.Guard().SetHITL(func(ctx context.Context, action guardrails.Action) (bool, error) {
+		// HITL 确认：发布审批请求到 SSE 事件流，等待前端确认。
+		// 当前无前端接入，fail-closed 拒绝（D-13 危险操作逐次确认）。
+		a.logger.Warn("设备危险操作待确认", "device", action.DeviceID, "method", action.Method)
+		return false, nil
+	})
+	a.ws.Handle("device", func(ctx context.Context, c *wstransport.Client, params json.RawMessage) (any, error) {
+		return a.handleDeviceMessage(ctx, c, params)
+	})
+
 	return nil
 }
 
@@ -370,6 +423,27 @@ func (a *App) Run(ctx context.Context) error {
 			errCh <- err
 		}
 	}()
+	go func() {
+		if err := a.cron.Start(ctx); err != nil {
+			a.logger.Warn("调度器已关闭", "err", err)
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				level, changed := a.monitor.Tick()
+				if changed {
+					a.logger.Info("降级等级变更", "level", level.String(), "budget", a.monitor.ContextBudget())
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go a.hub.StartHeartbeat(ctx)
 
 	select {
 	case err := <-errCh:
@@ -496,6 +570,9 @@ func (a *App) Logme() *fsutil.Logme { return a.logme }
 
 // Monitor 返回降级监控。
 func (a *App) Monitor() *degradation.Monitor { return a.monitor }
+
+// Orchestrator 返回 subagent 调度器。
+func (a *App) Orchestrator() *engine.Orchestrator { return a.orch }
 
 // Backup 返回备份管理器。
 func (a *App) Backup() *backup.Manager { return a.backup }

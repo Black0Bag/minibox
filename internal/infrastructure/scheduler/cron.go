@@ -135,6 +135,18 @@ func (s *CronScheduler) Remove(id string) error {
 	return nil
 }
 
+// RunNow 立即触发指定任务（不等待 cron 调度）。
+func (s *CronScheduler) RunNow(id string) error {
+	s.mu.RLock()
+	task, ok := s.tasks[id]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("任务不存在: %s", id)
+	}
+	go s.runTask(task)
+	return nil
+}
+
 // List 列出所有任务。
 func (s *CronScheduler) List() []scheduler.Task {
 	s.mu.RLock()

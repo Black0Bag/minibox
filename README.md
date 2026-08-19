@@ -9,7 +9,7 @@ minibox 项目的后端——Go 单文件二进制"中枢大脑"。
 
 ## 当前状态
 
-编码阶段 · Phase 0 环境搭建（详见 minibox-dev 仓库 `opencode` 分支的《编码任务追踪.md》）。
+编码阶段 · 全部 8 个 Phase 已编码（详见 minibox-dev 仓库 `opencode` 分支的《编码任务追踪.md》）。
 
 ## 技术栈
 

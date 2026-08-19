@@ -74,7 +74,7 @@ type Profile struct {
 	UnknownFields []string     // 报告并忽略的未知顶层字段（规范要求报告）
 }
 
-// Hooks P1-P8 插入接口（预留，供 composition root / 前端装配）。
+// Hooks P1-P9 插入接口（预留，供 composition root / 前端装配）。
 // 每个返回错误表示该组件加载失败（失败隔离，不影响其他组件）。
 type Hooks struct {
 	// P1 skill 注册
@@ -93,6 +93,8 @@ type Hooks struct {
 	OnHooks func(p *Profile) error
 	// P8 权限策略
 	OnPermissions func(p *Profile) error
+	// P9 角色卡加载（SillyTavern 格式 V1-V3，详见 domain/charactercard）
+	OnCharacterCard func(p *Profile, cardPath string) error
 }
 
 // Loader 世界书加载器。

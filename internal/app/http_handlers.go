@@ -536,20 +536,17 @@ func (a *App) handleScheduleDelete(w http.ResponseWriter, r *http.Request) {
 // handleScheduleTrigger 立即触发。
 func (a *App) handleScheduleTrigger(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tasks := a.cron.List()
-	for _, t := range tasks {
-		if t.ID == id {
-			a.respondOK(w, r, "api.schedules.trigger", map[string]any{"id": id, "status": "accepted"})
-			return
-		}
+	if err := a.cron.RunNow(id); err != nil {
+		a.respondErr(w, r, http.StatusNotFound, "not_found", err.Error())
+		return
 	}
-	a.respondErr(w, r, http.StatusNotFound, "not_found", "任务不存在: "+id)
+	a.respondOK(w, r, "api.schedules.trigger", map[string]any{"id": id, "status": "triggered"})
 }
 
 // handleServerStatus 服务器状态。
 func (a *App) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 	a.respondOK(w, r, "api.server.status", map[string]any{
-		"uptime": time.Now().Unix(),
+		"uptime": time.Since(a.startTime).Seconds(),
 		"ok":     true,
 	})
 }
@@ -611,8 +608,9 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 // 设计：Kubernetes 规范——liveness 不应检查依赖，否则误判重启。
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	a.respondOK(w, r, "api.health", map[string]any{
-		"status": "ok",
-		"uptime": time.Since(a.startTime).String(),
+		"status":  "ok",
+		"uptime":  time.Since(a.startTime).String(),
+		"degrade": a.monitor.Level().String(),
 	})
 }
 

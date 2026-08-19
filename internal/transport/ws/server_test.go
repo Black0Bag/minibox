@@ -75,7 +75,7 @@ func TestHandshakeRequired(t *testing.T) {
 // TestConnect_Handshake 握手成功后调方法。
 func TestConnect_Handshake(t *testing.T) {
 	srv := New(slog.New(slog.DiscardHandler))
-	srv.Handle("device", func(_ context.Context, _ *client, _ json.RawMessage) (any, error) {
+	srv.Handle("device", func(_ context.Context, _ *Client, _ json.RawMessage) (any, error) {
 		return map[string]string{"device": "ok"}, nil
 	})
 	conn, _ := newTestWSClient(t, srv)
@@ -137,7 +137,7 @@ func TestUnknownMethod(t *testing.T) {
 func TestPrefixRoute(t *testing.T) {
 	srv := New(slog.New(slog.DiscardHandler))
 	var called string
-	srv.Handle("device", func(_ context.Context, _ *client, params json.RawMessage) (any, error) {
+	srv.Handle("device", func(_ context.Context, _ *Client, params json.RawMessage) (any, error) {
 		var p struct {
 			Sub string `json:"sub"`
 		}
