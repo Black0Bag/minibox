@@ -25,9 +25,19 @@ type Engine struct {
 		Error(msg string, args ...any)
 	}
 	gate *MemoryGate // 强制记忆门（记忆中心化）
+	store RunStorer  // 运行持久化（B5 崩溃续跑，nil=纯内存模式）
 
 	mu   sync.RWMutex
 	runs map[string]*agent.Run
+}
+
+// RunStorer 运行持久化接口（B5 崩溃续跑）。
+// nil 表示纯内存模式（测试用），非 nil 则每次状态变更后落盘。
+type RunStorer interface {
+	SaveRun(run *agent.Run) error
+	LoadRun(runID string) (*agent.Run, error)
+	ListPendingRuns() ([]*agent.Run, error)
+	DeleteRun(runID string) error
 }
 
 // NewEngine 创建 Agent 引擎。
@@ -56,6 +66,23 @@ func (e *Engine) SetMemoryGate(g *MemoryGate) {
 	e.gate = g
 }
 
+// SetStore 设置运行持久化存储（B5 崩溃续跑）。
+func (e *Engine) SetStore(s RunStorer) {
+	e.store = s
+}
+
+// persistRun 持久化 Run 到 DB（store 为 nil 时跳过，不阻断流程）。
+func (e *Engine) persistRun(run *agent.Run) {
+	if e.store == nil {
+		return
+	}
+	if err := e.store.SaveRun(run); err != nil {
+		if e.logger != nil {
+			e.logger.Error("运行持久化失败", "run_id", run.ID, "err", err)
+		}
+	}
+}
+
 // Start 启动一次运行。
 func (e *Engine) Start(_ context.Context, req agent.Request) (*agent.Run, error) {
 	run := &agent.Run{
@@ -77,6 +104,7 @@ func (e *Engine) Start(_ context.Context, req agent.Request) (*agent.Run, error)
 	e.mu.Lock()
 	e.runs[run.ID] = run
 	e.mu.Unlock()
+	e.persistRun(run)
 
 	return run, nil
 }
@@ -96,6 +124,7 @@ func (e *Engine) Step(ctx context.Context, runID string) (*agent.Run, error) {
 		run.State = agent.StateFailed
 		run.Error = "步数预算耗尽"
 		run.UpdatedAt = time.Now()
+		e.persistRun(run)
 		return run, nil
 	}
 
@@ -135,6 +164,7 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 		run.State = agent.StateFailed
 		run.Error = err.Error()
 		run.UpdatedAt = time.Now()
+		e.persistRun(run)
 		return run, nil
 	}
 
@@ -169,6 +199,7 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 		run.Answer = resp.Content
 		run.State = agent.StateDone
 		run.UpdatedAt = time.Now()
+		e.persistRun(run)
 		if e.logger != nil && resp.Content == "" {
 			e.logger.Warn("LLM 返回空内容且无工具调用，视为无回答", "run_id", run.ID, "steps", run.Steps)
 		}
@@ -200,6 +231,7 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 		})
 		run.State = agent.StatePlanning
 		run.UpdatedAt = time.Now()
+		e.persistRun(run)
 		return run, nil
 	}
 
@@ -208,6 +240,7 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 		run.State = agent.StateFailed
 		run.Error = fmt.Sprintf("工具 %s 需要先记录计划（plan-first）", call.Name)
 		run.UpdatedAt = time.Now()
+		e.persistRun(run)
 		return run, nil
 	}
 
@@ -222,6 +255,7 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 		run.PendingTool = &call
 		run.State = agent.StateAwaitingApproval
 		run.UpdatedAt = time.Now()
+		e.persistRun(run)
 		return run, nil
 	}
 
@@ -234,6 +268,7 @@ func (e *Engine) stepPlanning(ctx context.Context, run *agent.Run) (*agent.Run, 
 	run.PendingTool = &call
 	run.State = agent.StateActing
 	run.UpdatedAt = time.Now()
+	e.persistRun(run)
 	return run, nil
 }
 
@@ -276,6 +311,7 @@ func (e *Engine) stepActing(ctx context.Context, run *agent.Run) (*agent.Run, er
 	run.PendingTool = nil
 	run.State = agent.StatePlanning
 	run.UpdatedAt = time.Now()
+	e.persistRun(run)
 	return run, nil
 }
 
@@ -304,6 +340,7 @@ func (e *Engine) Approve(_ context.Context, runID string, decision bool) (*agent
 		run.State = agent.StatePlanning
 	}
 	run.UpdatedAt = time.Now()
+	e.persistRun(run)
 	return run, nil
 }
 
@@ -318,17 +355,22 @@ func (e *Engine) Steer(_ context.Context, runID, msg string) error {
 	run.Messages = append(run.Messages, llm.Message{Role: llm.RoleUser, Content: msg})
 	run.State = agent.StatePlanning
 	run.UpdatedAt = time.Now()
+	e.persistRun(run)
 	return nil
 }
 
 // Abort 取消。
 func (e *Engine) Abort(_ context.Context, runID string) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if _, ok := e.runs[runID]; !ok {
+		e.mu.Unlock()
 		return fmt.Errorf("运行不存在: %s", runID)
 	}
 	delete(e.runs, runID)
+	e.mu.Unlock()
+	if e.store != nil {
+		_ = e.store.DeleteRun(runID)
+	}
 	return nil
 }
 
@@ -337,10 +379,21 @@ func (e *Engine) Resume(_ context.Context, runID string) (*agent.Run, error) {
 	e.mu.RLock()
 	run, ok := e.runs[runID]
 	e.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("运行不存在: %s", runID)
+	if ok {
+		return run, nil
 	}
-	return run, nil
+	// 内存无：尝试从 DB 恢复（B5 崩溃续跑）
+	if e.store != nil {
+		loaded, err := e.store.LoadRun(runID)
+		if err != nil {
+			return nil, fmt.Errorf("运行不存在（内存 + DB）: %s: %w", runID, err)
+		}
+		e.mu.Lock()
+		e.runs[runID] = loaded
+		e.mu.Unlock()
+		return loaded, nil
+	}
+	return nil, fmt.Errorf("运行不存在: %s", runID)
 }
 
 // Get 获取运行（内部用）。

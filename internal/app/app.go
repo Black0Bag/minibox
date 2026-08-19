@@ -33,7 +33,10 @@ import (
 	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
 	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
 	"github.com/Black0Bag/minibox/internal/platform/degradation"
+	"github.com/Black0Bag/minibox/internal/platform/eventbus"
 	"github.com/Black0Bag/minibox/internal/platform/fsutil"
+	"github.com/Black0Bag/minibox/internal/platform/instance"
+	"github.com/Black0Bag/minibox/internal/platform/timestamp"
 	"github.com/Black0Bag/minibox/internal/device"
 	"github.com/Black0Bag/minibox/internal/device/guardrails"
 	httptransport "github.com/Black0Bag/minibox/internal/transport/http"
@@ -74,6 +77,9 @@ type App struct {
 	backup   *backup.Manager      // 备份管理（B18）
 	upgrade  *upgrade.Manager     // 自升级（B19）
 	hub      *device.Hub          // 设备代理网关（D-01）
+	ts       *timestamp.Service   // 全局时间戳服务（B22）
+	instLock  *instance.Lock      // 单实例锁（N-12）
+	bus       *eventbus.EventBus[SystemEvent] // 进程内事件总线
 
 	// 会话（对话端点用）
 	sessions *sessionHub
@@ -87,6 +93,15 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	if err := a.openDatabase(cfg); err != nil {
 		return nil, err
 	}
+
+	// 1.5 单实例锁（N-12：防止重复启动）
+	lockPath := filepath.Join(filepath.Dir(cfg.Database.Path), "minibox.lock")
+	instLock, err := instance.Acquire(lockPath)
+	if err != nil {
+		_ = a.db.Close()
+		return nil, err
+	}
+	a.instLock = instLock
 
 	// 2. LLM 供应商 → Router
 	router, err := buildLLMRouter(cfg, logger)
@@ -123,6 +138,7 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	a.http = httptransport.New(cfg.Server, logger, a.toolReg())
 	a.sse = ssetransport.New(logger)
 	a.ws = wstransport.New(logger)
+	a.ws.RegisterDefaultHandlers() // 注册全部 WS method 处理器（device.*/browser.*/peer.*/event.*/system.*）
 	a.mountREST(a.http.Router()) // 阶段 1.2：挂全量 REST 业务端点
 	a.mountDeviceREST(a.http.Router()) // 设备代理 REST 端点（D-11）
 
@@ -148,6 +164,12 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	a.sessions.SetPublisher(func(sessionID, typ string, data any) {
 		_ = a.sse.Publish(sessionID, "agent", typ, data)
 	})
+
+	// 8. 全局时间戳服务（B22：NTP 校准 + 单调序号）
+	a.ts = timestamp.New(a.logger)
+
+	// 9. 进程内事件总线（模块间解耦通知）
+	a.bus = eventbus.New[SystemEvent](a.logger)
 
 	return a, nil
 }
@@ -305,6 +327,12 @@ func (a *App) buildAgent() {
 	if a.memory != nil {
 		eng.SetMemoryGate(engine.NewMemoryGate(a.memory))
 	}
+
+	// 运行持久化（B5 崩溃续跑：每次状态变更落盘 + Resume 从 DB 恢复）
+	if a.db != nil {
+		eng.SetStore(storage.NewRunStore(a.db))
+	}
+
 	a.agent = eng
 }
 
@@ -445,6 +473,9 @@ func (a *App) Run(ctx context.Context) error {
 	}()
 	go a.hub.StartHeartbeat(ctx)
 
+	// 时间戳服务启动（NTP 校准 + 定期同步）
+	a.ts.Start(ctx)
+
 	select {
 	case err := <-errCh:
 		return err
@@ -466,6 +497,12 @@ func (a *App) Close() error {
 	if a.cron != nil {
 		a.cron.Stop()
 	}
+	if a.ts != nil {
+		a.ts.Stop()
+	}
+	if a.instLock != nil {
+		_ = a.instLock.Release()
+	}
 	if a.db != nil {
 		return a.db.Close()
 	}
@@ -477,6 +514,22 @@ func (a *App) Config() config.Config { return a.cfg }
 
 // Logger 返回应用日志器。
 func (a *App) Logger() *slog.Logger { return a.logger }
+
+// Timestamp 返回全局时间戳服务（B22）。
+func (a *App) Timestamp() *timestamp.Service { return a.ts }
+
+// SystemEvent 进程内系统事件（eventbus 类型化事件）。
+type SystemEvent struct {
+	// Type 事件类型（如 "degradation_changed" / "backup_completed" / "upgrade_completed"）。
+	Type string
+	// Source 事件来源模块。
+	Source string
+	// Data 事件负载。
+	Data any
+}
+
+// EventBus 返回进程内事件总线。
+func (a *App) EventBus() *eventbus.EventBus[SystemEvent] { return a.bus }
 
 // ToolRegistry 返回工具注册表（供 /tools 端点）。
 func (a *App) ToolRegistry() *tools.Registry { return a.toolReg() }

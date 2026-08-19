@@ -141,24 +141,54 @@ func (h *sessionHub) Send(ctx context.Context, sessionID, text string) (string, 
 		return "", err
 	}
 
+	// 发布运行开始事件（SSE）
+	if h.publish != nil {
+		h.publish(sessionID, engine.EventRunStarted, map[string]string{
+			"run_id": run.ID, "session_id": sessionID,
+		})
+	}
+
 	// 推进状态机直到终结
 	for run.State == agent.StatePlanning || run.State == agent.StateActing {
+		// 发布步骤开始事件（SSE）
 		if h.publish != nil {
-			h.publish(sessionID, "agent.state", map[string]string{
-				"run_id": run.ID, "state": string(run.State),
+			h.publish(sessionID, engine.EventStepStarted, map[string]any{
+				"run_id": run.ID, "step": run.Steps, "state": string(run.State),
 			})
 		}
 		run, err = h.agent.Step(ctx, run.ID)
 		if err != nil {
 			return "", err
 		}
-		// 需要批准时默认拒绝并让 LLM 换方案（避免卡死）
+		// 发布步骤完成事件（SSE）
+		if h.publish != nil {
+			h.publish(sessionID, engine.EventStepFinished, map[string]any{
+				"run_id": run.ID, "step": run.Steps, "state": string(run.State),
+			})
+		}
+		// 需要批准时发布事件，然后默认拒绝并让 LLM 换方案（避免卡死）
 		if run.State == agent.StateAwaitingApproval {
+			if h.publish != nil {
+				toolName := ""
+				if run.PendingTool != nil {
+					toolName = run.PendingTool.Name
+				}
+				h.publish(sessionID, engine.EventApprovalRequested, map[string]string{
+					"run_id": run.ID, "tool_name": toolName,
+				})
+			}
 			run, _ = h.agent.Approve(ctx, run.ID, false)
 		}
 		if run.State == agent.StateFailed {
 			break
 		}
+	}
+
+	// 发布运行完成事件（SSE）
+	if h.publish != nil {
+		h.publish(sessionID, engine.EventRunFinished, map[string]any{
+			"run_id": run.ID, "state": string(run.State), "steps": run.Steps,
+		})
 	}
 
 	answer := run.Answer

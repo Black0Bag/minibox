@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Black0Bag/minibox/internal/config"
+	plerrors "github.com/Black0Bag/minibox/internal/platform/errors"
 	"github.com/Black0Bag/minibox/internal/domain/llm"
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 	"github.com/Black0Bag/minibox/internal/domain/permission"
@@ -116,16 +117,10 @@ func (a *App) respondOK(w http.ResponseWriter, r *http.Request, typ string, data
 	respondJSON(w, http.StatusOK, env)
 }
 
-// respondErr 写 RFC 7807 错误信封。
+// respondErr 写 RFC 7807 错误信封（platform/errors 包）。
 func (a *App) respondErr(w http.ResponseWriter, r *http.Request, status int, typ, detail string) {
-	env, _ := transport.NewEnvelope("system", r.URL.Path, "api.error", map[string]any{
-		"type":     typ,
-		"title":    "请求失败",
-		"detail":   detail,
-		"status":   status,
-		"instance": r.URL.Path,
-	})
-	respondJSON(w, status, env)
+	pd := plerrors.New(status, typ, "请求失败", detail).WithInstance(r.URL.Path)
+	plerrors.Write(w, pd)
 }
 
 // --- 对话域 ---

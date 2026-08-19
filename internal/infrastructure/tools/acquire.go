@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Black0Bag/minibox/internal/domain/tools"
+	"github.com/Black0Bag/minibox/internal/platform/retry"
 )
 
 // Acquirer B8 工具自动获取器（runx/ocx 2026 实证）。
@@ -139,27 +140,27 @@ func (a *Acquirer) downloadWithRetry(ctx context.Context, spec ToolSpec) (string
 		offset = fi.Size()
 	}
 
-	// 重试退避（最多 3 次：1s → 2s → 4s）
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-time.After(time.Duration(1<<attempt) * time.Second):
-			case <-ctx.Done():
-				return "", ctx.Err()
-			}
-		}
+	// 统一退避重试（retry 包：指数退避 + 随机抖动 + context 感知）
+	err := retry.Do(ctx, retry.Config{
+		MaxRetries:      3,
+		InitialInterval: 1 * time.Second,
+		MaxInterval:     10 * time.Second,
+		MaxElapsedTime:  30 * time.Second,
+	}, func() error {
 		err := a.downloadOnce(ctx, spec, tmp, offset)
 		if err == nil {
-			return tmp, nil
+			return nil
 		}
-		lastErr = err
 		// 更新断点（续传后 .part 变大）
-		if fi, err := os.Stat(tmp); err == nil {
+		if fi, statErr := os.Stat(tmp); statErr == nil {
 			offset = fi.Size()
 		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("工具 %s 下载失败（重试 3 次）: %w", spec.Name, err)
 	}
-	return "", fmt.Errorf("工具 %s 下载失败（重试 3 次）: %w", spec.Name, lastErr)
+	return tmp, nil
 }
 
 // downloadOnce 单次下载（从 offset 断点续传）。

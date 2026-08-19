@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/Black0Bag/minibox/internal/platform/retry"
 )
 
 // Spec 升级目标描述。
@@ -94,24 +96,32 @@ func (m *Manager) Rollback() error {
 	return nil
 }
 
-// download 下载新二进制到临时文件（带重试退避）。
+// download 下载新二进制到临时文件（统一退避重试）。
 func (m *Manager) download(ctx context.Context, spec Spec, retries int, wait time.Duration) (string, error) {
-	var lastErr error
-	for i := 0; i < retries; i++ {
-		tmp, err := m.downloadOnce(ctx, spec.URL)
-		if err == nil {
-			return tmp, nil
-		}
-		lastErr = err
-		if i < retries-1 {
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(wait):
-			}
-		}
+	maxRetries := uint64(retries)
+	if maxRetries <= 0 {
+		maxRetries = 3
 	}
-	return "", fmt.Errorf("下载失败（%d 次重试）: %w", retries, lastErr)
+	initial := wait
+	if initial <= 0 {
+		initial = time.Second
+	}
+
+	var tmp string
+	err := retry.Do(ctx, retry.Config{
+		MaxRetries:      maxRetries,
+		InitialInterval: initial,
+		MaxInterval:     10 * time.Second,
+		MaxElapsedTime:  30 * time.Second,
+	}, func() error {
+		var err error
+		tmp, err = m.downloadOnce(ctx, spec.URL)
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("下载失败（%d 次重试）: %w", maxRetries, err)
+	}
+	return tmp, nil
 }
 
 // downloadOnce 单次下载。
