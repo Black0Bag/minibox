@@ -31,6 +31,7 @@ import (
 	infrasched "github.com/Black0Bag/minibox/internal/infrastructure/scheduler"
 	"github.com/Black0Bag/minibox/internal/infrastructure/storage"
 	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
+	infrateamwork "github.com/Black0Bag/minibox/internal/infrastructure/teamwork"
 	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
 	"github.com/Black0Bag/minibox/internal/platform/degradation"
 	"github.com/Black0Bag/minibox/internal/platform/eventbus"
@@ -80,6 +81,7 @@ type App struct {
 	ts       *timestamp.Service   // 全局时间戳服务（B22）
 	instLock  *instance.Lock      // 单实例锁（N-12）
 	bus       *eventbus.EventBus[SystemEvent] // 进程内事件总线
+	tw        *infrateamwork.Coordinator // 团队协作编排（T 系列）
 
 	// 会话（对话端点用）
 	sessions *sessionHub
@@ -401,6 +403,8 @@ func (a *App) buildSetup(cfg config.Config) error {
 	a.cron = infrasched.New(&taskRunner{agent: a.agent, logger: a.logger}, a.logger)
 	a.logme = fsutil.NewLogme(filepath.Join(dataDir, "logme"), 7*24*time.Hour)
 	a.monitor = degradation.NewMonitor()
+	// 团队协作编排（T 系列）：前台分诊 → 组建 → 讨论 → 结案（LLM 驱动）
+	a.tw = infrateamwork.NewCoordinator(a.logger, nil, a.llm)
 	a.backup = backup.NewManager(cfg.Database.Path, filepath.Join(dataDir, "backups"))
 	a.upgrade = upgrade.NewManager(binaryPath())
 
