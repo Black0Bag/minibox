@@ -497,7 +497,21 @@ func (a *App) Run(ctx context.Context) error {
 			case <-ticker.C:
 				level, changed := a.monitor.Tick()
 				if changed {
-					a.logger.Info("降级等级变更", "level", level.String(), "budget", a.monitor.ContextBudget())
+					budget := a.monitor.ContextBudget()
+					a.logger.Info("降级等级变更", "level", level.String(), "budget", budget)
+					// B15 闭环：降级变更主动推送（SSE Broadcast 全会话 + eventbus）
+					payload := map[string]any{
+						"level":      level.String(),
+						"level_code": int(level),
+						"budget":     budget,
+						"at":         a.ts.Now().Format(time.RFC3339),
+					}
+					a.sse.Broadcast("system", engine.EventDegradeNotify, payload)
+					a.bus.Publish(SystemEvent{
+						Type:   "degradation_changed",
+						Source: "monitor",
+						Data:   payload,
+					})
 				}
 			case <-ctx.Done():
 				return
