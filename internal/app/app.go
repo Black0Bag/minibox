@@ -188,7 +188,13 @@ func (a *App) openDatabase(cfg config.Config) error {
 		return err
 	}
 
-	store := storage.NewSQLiteStore(db, tok)
+	// 向量维度一致性校验（B24：配置维度 vs schema_meta；vec0 创建时固定）
+	if err := storage.ValidateVecDim(db, cfg.Embedding.Dimensions); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	store := storage.NewSQLiteStore(db, tok, cfg.Embedding.Dimensions)
 	a.memory = store
 
 	// 编译管道 + 蒸馏 + 组装器（阶段 2.1 接 embedding）

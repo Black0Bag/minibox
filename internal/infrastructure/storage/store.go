@@ -11,17 +11,29 @@ import (
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 )
 
+// DefaultVecDim 默认向量维度（与 0001/0002 迁移 kb_vec embedding float[1024] 一致）。
+const DefaultVecDim = 1024
+
 // SQLiteStore 基于 SQLite 的知识库存储实现。
 // 表：kb_store（存储区）/ kb_cache（缓存区）/ kb_fts（FTS5）/ kb_vec（sqlite-vec）。
 type SQLiteStore struct {
 	db        *sql.DB
 	tokenizer memory.Tokenizer
+	vecDim    int // 向量维度（来自配置；0 或 <0 时回落 DefaultVecDim）
 }
 
 // NewSQLiteStore 创建 SQLite 知识库存储。
-func NewSQLiteStore(db *sql.DB, tokenizer memory.Tokenizer) *SQLiteStore {
-	return &SQLiteStore{db: db, tokenizer: tokenizer}
+// vecDim 来自 cfg.Embedding.Dimensions（0=模型默认，回落 DefaultVecDim 1024）。
+// vec0 虚表维度在创建时固定，切换 embedding 模型须重建 kb_vec 索引（schema_meta 监测）。
+func NewSQLiteStore(db *sql.DB, tokenizer memory.Tokenizer, vecDim int) *SQLiteStore {
+	if vecDim <= 0 {
+		vecDim = DefaultVecDim
+	}
+	return &SQLiteStore{db: db, tokenizer: tokenizer, vecDim: vecDim}
 }
+
+// VecDim 返回当前向量维度（配置接入后，与 kb_vec 索引一致）。
+func (s *SQLiteStore) VecDim() int { return s.vecDim }
 
 // Search 混合检索（三级降级：Hybrid→FTS5→LIKE，mika ADR-003 实证）。
 // 有 QueryVector → Hybrid（vec KNN + FTS5 + RRF 融合）；

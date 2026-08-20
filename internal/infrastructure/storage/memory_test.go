@@ -29,7 +29,7 @@ func newTestStore(t *testing.T) (*SQLiteStore, *SQLiteCompiler, *SQLiteDistiller
 		t.Fatalf("创建分词器失败: %v", err)
 	}
 
-	store := NewSQLiteStore(db, tokenizer)
+	store := NewSQLiteStore(db, tokenizer, DefaultVecDim)
 	compiler := NewCompiler(db, store)
 	distiller := NewDistiller(db)
 	return store, compiler, distiller

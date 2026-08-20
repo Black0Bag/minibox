@@ -8,14 +8,11 @@ import (
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 )
 
-// vecDim 向量维度（对齐 0001/0002 迁移 kb_vec embedding float[1024]）。
-// 切换 embedding 模型需同步改 schema（设计文档：schema_meta 监测 dim 变化重建索引）。
-const vecDim = 1024
-
 // vectorJSON 把 float32 向量序列化为 vec0 MATCH 需要的 JSON 字符串。
-func vectorJSON(vec []float32) (string, error) {
-	if len(vec) != vecDim {
-		return "", fmt.Errorf("向量维度 %d 与索引 %d 不一致", len(vec), vecDim)
+// 维度校验使用存储实例的 vecDim（配置接入，见 NewSQLiteStore）。
+func (s *SQLiteStore) vectorJSON(vec []float32) (string, error) {
+	if len(vec) != s.vecDim {
+		return "", fmt.Errorf("向量维度 %d 与索引 %d 不一致（检查 cfg.embedding.dimensions）", len(vec), s.vecDim)
 	}
 	b, err := json.Marshal(vec)
 	if err != nil {
@@ -27,7 +24,7 @@ func vectorJSON(vec []float32) (string, error) {
 // Embed 写入/更新条目向量（编译管道 embedding 后调用）。
 // 幂等：vec0 主键 doc_id + tier 唯一，重复写入覆盖（INSERT OR REPLACE）。
 func (s *SQLiteStore) Embed(ctx context.Context, id int64, tier memory.Tier, vec []float32) error {
-	queryVec, err := vectorJSON(vec)
+	queryVec, err := s.vectorJSON(vec)
 	if err != nil {
 		return err
 	}
@@ -57,7 +54,7 @@ func (s *SQLiteStore) searchVec(ctx context.Context, tier memory.Tier, q memory.
 	if len(q.QueryVector) == 0 {
 		return nil, nil
 	}
-	queryVec, err := vectorJSON(q.QueryVector)
+	queryVec, err := s.vectorJSON(q.QueryVector)
 	if err != nil {
 		return nil, err
 	}

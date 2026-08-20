@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -129,4 +130,34 @@ func (m *Migrator) apply(mig migration) error {
 	}
 
 	return tx.Commit()
+}
+
+// ValidateVecDim 校验配置向量维度与 schema_meta 记录的一致性（B24 向量维度全适配）。
+// vec0 虚表维度创建时固定（0001/0002：float[1024]），切换 embedding 模型须重建 kb_vec 索引。
+// - schema_meta 未记录（首次启动）→ 写入记录，返回 nil。
+// - 已记录且与配置不一致 → 返回可操作错误（提示重建索引），防止静默写入错维向量。
+func ValidateVecDim(db *sql.DB, dim int) error {
+	if dim <= 0 {
+		dim = DefaultVecDim
+	}
+	var recorded sql.NullInt64
+	err := db.QueryRow("SELECT embedding_dim FROM schema_meta WHERE id = 1").Scan(&recorded)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("读取 schema_meta 失败: %w", err)
+	}
+	// 首次：写入维度记录
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := db.Exec(
+			"INSERT INTO schema_meta (id, embedding_dim) VALUES (1, ?) "+
+				"ON CONFLICT(id) DO UPDATE SET embedding_dim = excluded.embedding_dim", dim); err != nil {
+			return fmt.Errorf("写入 schema_meta 维度失败: %w", err)
+		}
+		return nil
+	}
+	// 已记录：比对
+	if recorded.Valid && int(recorded.Int64) != dim {
+		return fmt.Errorf("向量维度不匹配：schema_meta=%d 配置=%d。"+
+			"切换 embedding 模型须重建 kb_vec 索引（DROP 后重建，向量由编译管道重灌）", recorded.Int64, dim)
+	}
+	return nil
 }

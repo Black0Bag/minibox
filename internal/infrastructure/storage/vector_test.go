@@ -27,14 +27,14 @@ func newTestVecStore(t *testing.T) *SQLiteStore {
 	if err != nil {
 		t.Fatalf("创建分词器失败: %v", err)
 	}
-	return NewSQLiteStore(db, tok)
+	return NewSQLiteStore(db, tok, DefaultVecDim)
 }
 
 // vecFor 构造一个可预测的 1024 维向量：第 i 维 = value，其余 0。
 // 用于 KNN 距离可断言。
 func vecFor(i int, value float32) []float32 {
-	v := make([]float32, vecDim)
-	if i >= 0 && i < vecDim {
+	v := make([]float32, DefaultVecDim)
+	if i >= 0 && i < DefaultVecDim {
 		v[i] = value
 	}
 	return v
