@@ -77,6 +77,24 @@ func (r *Registry) RegisterAlias(alias, canonical string) {
 	r.aliases[alias] = canonical
 }
 
+// Remove 移除工具（B8 工具重装/升级覆盖用）。
+// 返回是否实际移除（不存在返回 false，非错误）。
+func (r *Registry) Remove(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.tools[name]; !ok {
+		return false
+	}
+	delete(r.tools, name)
+	for i, n := range r.order {
+		if n == name {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
 // Get 获取工具。
 func (r *Registry) Get(name string) (Tool, bool) {
 	r.mu.RLock()

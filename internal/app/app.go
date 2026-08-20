@@ -278,6 +278,10 @@ func buildLLMRouter(cfg config.Config, logger *slog.Logger) (llm.Provider, error
 func (a *App) buildTools(cfg config.Config) error {
 	reg := tools.NewRegistry()
 
+	// B8 工具自动获取器（创建提前：buildTools 需要注册 acquire_tool，且 REST 端点可用）
+	dataDir := filepath.Dir(cfg.Database.Path)
+	a.acq = infratools.NewAcquirer(filepath.Join(dataDir, "tools"), 60*time.Second)
+
 	// 内置文件工具（路径沙箱：root = 项目运行目录）
 	validator := fsutil.NewPathValidator(cfg.Database.Path, cfg.Database.Path)
 	for _, t := range []tools.Tool{
@@ -298,6 +302,11 @@ func (a *App) buildTools(cfg config.Config) error {
 		}
 	}
 
+	// B8 自举工具：LLM 可主动请求下载外部工具（下载成功后在 handleToolAcquire 注册可执行包装）
+	if err := reg.Register(infratools.NewAcquireTool(a.acq)); err != nil {
+		return err
+	}
+
 	// 权限链（Phase 5 模块 30：禁止表 → 模式 → 元数据 → 批准 → 参数校验）
 	chain := permission.NewChain(
 		permission.NewForbiddenPolicy(),
@@ -309,6 +318,25 @@ func (a *App) buildTools(cfg config.Config) error {
 
 	a.toolkit = &toolkit{reg: reg, policy: chain}
 	return nil
+}
+
+// registerExecTool 把 B8 下载的二进制注册为可执行工具（B8 闭环）。
+// 重名（已注册）→ 覆盖为最新版本；失败仅记录日志（不阻断下载成功返回）。
+func (a *App) registerExecTool(spec infratools.ToolSpec, path string) {
+	if a.toolkit == nil || a.toolkit.reg == nil {
+		a.logger.Warn("工具注册表未就绪，跳过 B8 工具注册", "tool", spec.Name)
+		return
+	}
+	t := infratools.NewExecTool(spec, path, nil)
+	if err := a.toolkit.reg.Register(t); err != nil {
+		// 已存在：先移除再注册（Registry 无 Replace；重名覆盖最新版本）
+		_ = a.toolkit.reg.Remove(spec.Name)
+		if err2 := a.toolkit.reg.Register(t); err2 != nil {
+			a.logger.Warn("B8 工具注册失败", "tool", spec.Name, "err", err2)
+			return
+		}
+	}
+	a.logger.Info("B8 工具已注册可执行包装", "tool", spec.Name, "path", path)
 }
 
 // toolReg 返回工具注册表（供 /tools 端点）。
@@ -372,7 +400,6 @@ func (a *App) buildSetup(cfg config.Config) error {
 	}, a.logger)
 	a.cron = infrasched.New(&taskRunner{agent: a.agent, logger: a.logger}, a.logger)
 	a.logme = fsutil.NewLogme(filepath.Join(dataDir, "logme"), 7*24*time.Hour)
-	a.acq = infratools.NewAcquirer(filepath.Join(dataDir, "tools"), 60*time.Second)
 	a.monitor = degradation.NewMonitor()
 	a.backup = backup.NewManager(cfg.Database.Path, filepath.Join(dataDir, "backups"))
 	a.upgrade = upgrade.NewManager(binaryPath())

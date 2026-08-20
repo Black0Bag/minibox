@@ -725,9 +725,12 @@ func (a *App) handleToolAcquire(w http.ResponseWriter, r *http.Request) {
 		a.respondErr(w, r, http.StatusInternalServerError, "acquire_failed", err.Error())
 		return
 	}
+	// B8 闭环：下载成功后注册可执行包装，LLM 后续可直接调用该工具
+	a.registerExecTool(spec, res.Path)
 	a.respondOK(w, r, "api.tools.acquire", map[string]any{
 		"path":      res.Path,
 		"installed": res.Installed,
+		"registered": true,
 	})
 }
 
