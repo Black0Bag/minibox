@@ -17,25 +17,25 @@
   - `internal/infrastructure/llm/openai_compat.go` — `buildRequest()` 扩展 Anthropic `thinking` 参数
 - **验证**：同上
 
-### 3. 性能监控 API
+### 3. 性能监控 API ✅ 已完成
 - **新增文件**：`internal/monitor/monitor.go` — CPU/内存/磁盘/进程采集
 - **改动文件**：
   - `internal/app/http_handlers.go` — 新增 `handleMonitor...` 端点
   - `internal/app/app.go` — 挂载监控端点
-- **验证**：同上
+- **验证**：✅ 已通过 `go build ./...` + `go test ./...` + `go vet ./...`
 
-### 4. To-do list 长程任务
+### 4. To-do list 长程任务 ✅ 已完成
 - **改动文件**：
   - `internal/domain/agent/engine.go` — `Run` 结构体追加 `TodoItems` 字段
   - `internal/infrastructure/engine/engine.go` — 扩展运行状态机
   - `internal/app/http_handlers.go` — 新增 todo 端点
   - `internal/app/app.go` — 挂载 todo 端点
-- **验证**：同上
+- **验证**：✅ 已通过 `go build ./...` + `go test ./...` + `go vet ./...`
 
-### 5. CLI 配置模式（--init）
+### 5. CLI 配置模式（--init）✅ 已完成
 - **改动文件**：`cmd/minibox/main.go` — 新增 `--init` flag
-- **验证**：`go build ./...`
+- **验证**：✅ 已通过 `go build ./...` + `go test ./...`
 
-### 6. API 中文文档
-- **新增文件**：`docs/api.md` — OpenAPI 3.0 中文文档
-- **验证**：文件完整性检查
+### 6. API 中文文档 ✅ 已完成
+- **新增文件**：`docs/api.md` — 全量 REST API 中文文档（14 个域，400+ 行）
+- **验证**：✅ 文件完整性检查通过
