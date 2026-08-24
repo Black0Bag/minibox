@@ -18,6 +18,4 @@ data/
 # 测试临时文件夹
 test-tmp/
 /tmp/
-
-# 编译产物
 bin/

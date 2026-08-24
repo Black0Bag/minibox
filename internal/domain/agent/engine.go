@@ -39,7 +39,8 @@ const (
 	ModeBuild Mode = "build"
 )
 
-// Run Agent 一次运行（可持久化，每步落 todo_items/内存，崩溃续跑）。
+// Run Agent 一次运行（可持久化，每步落 todoItems/内存，崩溃续跑）。
+// 支持 TodoItems 长程任务管理（B9）。
 type Run struct {
 	ID          string        `json:"id"`
 	SessionID   string        `json:"session_id"`
@@ -53,8 +54,12 @@ type Run struct {
 	SeenCalls   []string      `json:"seen_calls"`             // 已执行工具指纹（防重复）
 	Answer      string        `json:"answer,omitempty"`       // 最终答案
 	Error       string        `json:"error,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	// TodoItems 长程任务清单（B9 to-do-list 长程任务）。
+	// Agent 运行前 LLM 生成的计划清单，每次工具执行后驱动状态流转。
+	// 支持中断续跑：Run 持久化时连同 TodoItems 一起落盘。
+	TodoItems []TodoItem `json:"todo_items,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // Plan 计划（plan-first，go-steer/core-agent 实证）。
@@ -110,6 +115,34 @@ type Dependencies struct {
 	LLM    llm.Provider // LLM 供应商
 	Memory memory.Store // 知识库
 	Tools  ToolExecutor // 工具执行器（Phase 5 定义）
+}
+
+// TodoStatus 任务项状态（Claude Code V2 TaskCreate 实证）。
+type TodoStatus string
+
+const (
+	// TodoPending 等待中（未开始）。
+	TodoPending TodoStatus = "pending"
+	// TodoInProgress 执行中。
+	TodoInProgress TodoStatus = "in_progress"
+	// TodoCompleted 已完成。
+	TodoCompleted TodoStatus = "completed"
+)
+
+// TodoItem to-do 任务项（Claude Code TodoWrite 结构）。
+type TodoItem struct {
+	// ID 唯一标识（UUID）。
+	ID string `json:"id"`
+	// Content 任务描述。
+	Content string `json:"content"`
+	// Status 状态（pending/in_progress/completed）。
+	Status TodoStatus `json:"status"`
+	// CreatedAt 创建时间。
+	CreatedAt time.Time `json:"created_at"`
+	// StartedAt 开始执行时间。
+	StartedAt time.Time `json:"started_at,omitempty"`
+	// CompletedAt 完成时间。
+	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
 
 // ToolExecutor 工具执行接口（Phase 5 实现，这里定义窄接口）。

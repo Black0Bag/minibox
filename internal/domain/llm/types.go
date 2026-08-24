@@ -79,13 +79,17 @@ type FunctionDef struct {
 
 // Request 生成请求。
 type Request struct {
-	Model       string
-	Feature     Feature       // B6 功能标识（如 "agent"/"pref_extract"/"subagent"），Router 据此选择模型
-	Messages    []Message
-	Thinking    ThinkingLevel
-	Tools       []ToolDef
-	MaxTokens   *int
-	Temperature *float64
+	Model            string
+	Feature          Feature       // B6 功能标识（如 "agent"/"pref_extract"/"subagent"），Router 据此选择模型
+	Messages         []Message
+	Thinking         ThinkingLevel
+	Tools            []ToolDef
+	MaxTokens        *int
+	Temperature      *float64
+	TopP             *float64       `json:"top_p,omitempty"`             // 核采样（0.0~1.0）
+	FrequencyPenalty *float64       `json:"frequency_penalty,omitempty"` // 频率惩罚（-2.0~2.0）
+	PresencePenalty  *float64       `json:"presence_penalty,omitempty"`  // 存在惩罚（-2.0~2.0）
+	StopSequences    []string       `json:"stop_sequences,omitempty"`    // 停止序列
 }
 
 // ToolCall 工具调用（模型请求执行的工具）。

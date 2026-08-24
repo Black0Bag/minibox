@@ -143,7 +143,7 @@ func (c *Collector) cpuPercentLocked() float64 {
 	}
 	if !c.hasLast {
 		c.lastCPU = cur
-		hasLast = true
+		c.hasLast = true
 		return 0 // 首次采样无差值
 	}
 	totalDelta := cur.total() - c.lastCPU.total()

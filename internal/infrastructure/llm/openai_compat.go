@@ -54,13 +54,22 @@ func (c *OpenAICompat) Name() string { return c.name }
 
 // chatCompletionReq OpenAI chat/completions 请求体。
 type chatCompletionReq struct {
-	Model           string        `json:"model"`
-	Messages        []chatMessage `json:"messages"`
-	Stream          bool          `json:"stream,omitempty"`
-	MaxTokens       *int          `json:"max_tokens,omitempty"`
-	Temperature     *float64      `json:"temperature,omitempty"`
-	Tools           []chatTool    `json:"tools,omitempty"`
-	ReasoningEffort *string       `json:"reasoning_effort,omitempty"`
+	Model            string        `json:"model"`
+	Messages         []chatMessage `json:"messages"`
+	Stream           bool          `json:"stream,omitempty"`
+	MaxTokens        *int          `json:"max_tokens,omitempty"`
+	Temperature      *float64      `json:"temperature,omitempty"`
+	TopP             *float64      `json:"top_p,omitempty"`
+	FrequencyPenalty *float64      `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64      `json:"presence_penalty,omitempty"`
+	Stop             []string      `json:"stop,omitempty"`
+	Tools            []chatTool    `json:"tools,omitempty"`
+	ReasoningEffort  *string       `json:"reasoning_effort,omitempty"`
+	// Anthropic 扩展思考（通过 OpenAI 兼容模式传递）
+	Thinking *struct {
+		Type         string `json:"type"`
+		BudgetTokens int    `json:"budget_tokens,omitempty"`
+	} `json:"thinking,omitempty"`
 }
 
 // chatMessage 消息。
@@ -204,20 +213,56 @@ func (c *OpenAICompat) buildRequest(req llm.Request, stream bool) ([]byte, error
 		})
 	}
 
+	// 思考强度映射：不同供应商适配不同参数
+	// OpenAI/DeepSeek → reasoning_effort（low/medium/high）
+	// Anthropic → thinking（extended + budget_tokens）
+	// 通用降级：不支持时自动忽略
 	var reasoningEffort *string
+	var thinking *struct {
+		Type         string `json:"type"`
+		BudgetTokens int    `json:"budget_tokens,omitempty"`
+	}
 	if req.Thinking != llm.ThinkingNone && req.Thinking != "" {
 		eff := string(req.Thinking)
 		reasoningEffort = &eff
+		// Anthropic extended thinking：当使用 claude 系列模型时启用
+		if strings.Contains(req.Model, "claude") {
+			reasoningEffort = nil // 不发送 reasoning_effort
+			thinking = &struct {
+				Type         string `json:"type"`
+				BudgetTokens int    `json:"budget_tokens,omitempty"`
+			}{
+				Type: "enabled",
+			}
+			// 根据思考强度设置预算 token
+			switch req.Thinking {
+			case llm.ThinkingLow:
+				thinking.BudgetTokens = 1024
+			case llm.ThinkingMedium:
+				thinking.BudgetTokens = 4096
+			case llm.ThinkingHigh:
+				thinking.BudgetTokens = 8192
+			case llm.ThinkingXHigh:
+				thinking.BudgetTokens = 16384
+			default:
+				thinking.BudgetTokens = 2048
+			}
+		}
 	}
 
 	body := chatCompletionReq{
-		Model:           req.Model,
-		Messages:        messages,
-		Stream:          stream,
-		MaxTokens:       req.MaxTokens,
-		Temperature:     req.Temperature,
-		Tools:           tools,
-		ReasoningEffort: reasoningEffort,
+		Model:            req.Model,
+		Messages:         messages,
+		Stream:           stream,
+		MaxTokens:        req.MaxTokens,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		FrequencyPenalty: req.FrequencyPenalty,
+		PresencePenalty:  req.PresencePenalty,
+		Stop:             req.StopSequences,
+		Tools:            tools,
+		ReasoningEffort:  reasoningEffort,
+		Thinking:         thinking,
 	}
 
 	// 默认模型回退：req.Model 为空时用供应商默认模型（域契约"空=用默认"）

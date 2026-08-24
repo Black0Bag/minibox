@@ -33,6 +33,7 @@ import (
 	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
 	infrateamwork "github.com/Black0Bag/minibox/internal/infrastructure/teamwork"
 	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
+	"github.com/Black0Bag/minibox/internal/monitor"
 	"github.com/Black0Bag/minibox/internal/platform/degradation"
 	"github.com/Black0Bag/minibox/internal/platform/eventbus"
 	"github.com/Black0Bag/minibox/internal/platform/fsutil"
@@ -85,6 +86,10 @@ type App struct {
 
 	// 会话（对话端点用）
 	sessions *sessionHub
+
+	// 性能监控（Phase 3.5：采集器 + 历史环形缓冲）
+	perfCollector *monitor.Collector
+	perfHistory   *historyRing
 }
 
 // New 创建 App，装配所有依赖。
@@ -172,6 +177,10 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 
 	// 9. 进程内事件总线（模块间解耦通知）
 	a.bus = eventbus.New[SystemEvent](a.logger)
+
+	// 10. 性能监控（Phase 3.5：采集器 + 30s 定时采样进历史环形缓冲）
+	a.perfCollector = monitor.NewCollector()
+	a.perfHistory = newHistoryRing(60)
 
 	return a, nil
 }
@@ -291,6 +300,18 @@ func (a *App) buildTools(cfg config.Config) error {
 		infratools.NewWriteFile(validator),
 		infratools.NewListDir(validator),
 		infratools.NewSearchFiles(validator),
+	} {
+		if err := reg.Register(t); err != nil {
+			return err
+		}
+	}
+
+	// B9 待办任务工具（to-do list 长程任务管理）
+	for _, t := range []tools.Tool{
+		infratools.NewTodoCreate(),
+		infratools.NewTodoUpdate(),
+		infratools.NewTodoList(),
+		infratools.NewTodoDelete(),
 	} {
 		if err := reg.Register(t); err != nil {
 			return err
@@ -516,6 +537,10 @@ func (a *App) Run(ctx context.Context) error {
 						Source: "monitor",
 						Data:   payload,
 					})
+				}
+				// Phase 3.5：性能指标定时采样进历史环形缓冲（30s 一条，60 条 = 30 分钟）
+				if a.perfCollector != nil && a.perfHistory != nil {
+					a.perfHistory.Push(a.perfCollector.Collect())
 				}
 			case <-ctx.Done():
 				return

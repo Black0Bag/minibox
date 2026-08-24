@@ -100,6 +100,12 @@ func (a *App) mountREST(r chi.Router) {
 	r.Get("/api/v1/config", a.handleConfig)
 	r.Patch("/api/v1/config", a.handleConfigUpdate)
 
+	// 性能监控域（Phase 3.5：CPU/内存/磁盘/进程指标）
+	r.Route("/api/v1/monitor", func(r chi.Router) {
+		r.Get("/metrics", a.handleMonitorMetrics)
+		r.Get("/history", a.handleMonitorHistory)
+	})
+
 	// 团队协作域（T 系列：分诊 → 组建 → 讨论 → 结案）
 	r.Route("/api/v1/teamwork", func(r chi.Router) {
 		r.Get("/teams", a.handleTeamList)

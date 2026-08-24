@@ -14,6 +14,9 @@ import (
 	"github.com/Black0Bag/minibox/internal/domain/llm"
 )
 
+// runContextKey 上下文键，用于存储 Agent Run。
+type runContextKey struct{}
+
 // Engine Agent 引擎实现（5 状态机）。
 type Engine struct {
 	llm    llm.Provider
@@ -282,6 +285,8 @@ func (e *Engine) stepActing(ctx context.Context, run *agent.Run) (*agent.Run, er
 
 	var result string
 	if e.tools != nil {
+		// 将 Run 注入到上下文中，供 todo 工具使用
+		ctx = context.WithValue(ctx, runContextKey{}, run)
 		out, err := e.tools.Execute(ctx, *call)
 		if err != nil {
 			result = fmt.Sprintf("错误: %s", err.Error())
