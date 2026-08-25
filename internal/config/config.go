@@ -21,6 +21,7 @@ type Config struct {
 	LLM       LLMConfig       `koanf:"llm"`
 	Memory    MemoryConfig    `koanf:"memory"`
 	Embedding EmbeddingConfig `koanf:"embedding"`
+	Auth      AuthConfig      `koanf:"auth"`
 }
 
 // EmbeddingConfig 向量化配置（模块 19）。
@@ -151,6 +152,12 @@ type MemoryConfig struct {
 	MaxTokens int `koanf:"max_tokens"`
 }
 
+// AuthConfig 认证配置。
+type AuthConfig struct {
+	// TokenFile 存储 Bearer Token 的文件路径，默认 data/auth.token。
+	TokenFile string `koanf:"token_file"`
+}
+
 // Default 返回默认配置（安全默认值优先）。
 func Default() Config {
 	return Config{
@@ -190,6 +197,9 @@ func Default() Config {
 		Embedding: EmbeddingConfig{
 			Dimensions: 1024,
 			Timeout:    30 * time.Second,
+		},
+		Auth: AuthConfig{
+			TokenFile: "data/auth.token",
 		},
 	}
 }

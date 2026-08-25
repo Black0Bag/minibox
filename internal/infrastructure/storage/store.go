@@ -40,8 +40,14 @@ func (s *SQLiteStore) VecDim() int { return s.vecDim }
 // 无向量 → FTS5 → LIKE 降级。
 // 任何一级空结果/失败都会继续降级（保证不因单级空结果丢失检索能力）。
 func (s *SQLiteStore) Search(ctx context.Context, q memory.SearchQuery) ([]memory.Hit, error) {
+	if strings.TrimSpace(q.Text) == "" {
+		return nil, nil
+	}
 	if q.TopK == 0 {
 		q.TopK = 10
+	}
+	if q.Tier == "" {
+		q.Tier = memory.TierStore
 	}
 	if q.MinScore == 0 {
 		q.MinScore = 0.0
@@ -118,9 +124,9 @@ func (s *SQLiteStore) searchFTS(ctx context.Context, table string, q memory.Sear
 		h.Tags = parseTags(tags)
 		h.MatchType = "fts"
 		h.Tier = q.Tier
-		if h.Score >= q.MinScore {
-			hits = append(hits, h)
-		}
+		// FTS5 bm25 越小（通常是负值）代表越相关；MinScore 属于向量相似度语义，
+		// 不应用于 FTS bm25，否则会过滤掉所有正常 FTS 命中。
+		hits = append(hits, h)
 	}
 	return hits, rows.Err()
 }
@@ -217,26 +223,47 @@ func (s *SQLiteStore) List(ctx context.Context, tier memory.Tier, offset, limit 
 // Upsert 写入存储区。
 // 幂等：source_hash 唯一约束，重复写入是 no-op（SmartSearch 实证）。
 func (s *SQLiteStore) Upsert(ctx context.Context, e memory.Entry) error {
-	// 预分词（写入和查询同一 pipeline）
+	if s.tokenizer == nil {
+		return fmt.Errorf("知识库分词器未就绪")
+	}
 	tokenized, err := s.tokenizer.TokenizeIndex(e.Content)
 	if err != nil {
 		return fmt.Errorf("分词失败: %w", err)
 	}
-	tagsJSON, _ := json.Marshal(e.Tags)
+	tagsJSON, err := json.Marshal(e.Tags)
+	if err != nil {
+		return fmt.Errorf("序列化 tags 失败: %w", err)
+	}
 
-	// 触发器自动同步 FTS5（用原始 content 还是分词后？）
-	// 设计：kb_store.content 存原始文本，分词结果单独存 tokenized 列用于 FTS。
-	// 说明：当前 0001_init.sql 的 kb_fts 触发器直接同步 content（未分词）。
-	// 为支持 jieba，需要调整：写入时把 tokenized 存到一个 tokenized 列，FTS 触发器读它。
-	// 这里先保持简单：content 存原始，FTS 触发器后续迁移改为读 tokenized 列。
-	_ = tokenized
+	if e.ID > 0 {
+		result, err := s.db.ExecContext(ctx, `
+			UPDATE kb_store
+			SET content = ?, tokenized_content = ?, source = ?, tags = ?,
+			    source_hash = ?, importance = ?, updated_at = datetime('now')
+			WHERE id = ?`,
+			e.Content, tokenized, e.Source, string(tagsJSON), e.SourceHash, e.Importance, e.ID)
+		if err != nil {
+			return fmt.Errorf("更新知识条目失败: %w", err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("读取知识条目更新结果失败: %w", err)
+		}
+		if changed == 0 {
+			return fmt.Errorf("条目不存在: %d", e.ID)
+		}
+		return nil
+	}
 
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO kb_store (content, source, tags, source_hash, importance)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO kb_store (content, tokenized_content, source, tags, source_hash, importance)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source_hash) DO NOTHING`,
-		e.Content, e.Source, tagsJSON, e.SourceHash, e.Importance)
-	return err
+		e.Content, tokenized, e.Source, string(tagsJSON), e.SourceHash, e.Importance)
+	if err != nil {
+		return fmt.Errorf("写入知识条目失败: %w", err)
+	}
+	return nil
 }
 
 // PutCache 写入缓存区（带 TTL）。

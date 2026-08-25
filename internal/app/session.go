@@ -5,6 +5,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -12,14 +14,17 @@ import (
 	"github.com/Black0Bag/minibox/internal/domain/llm"
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 	"github.com/Black0Bag/minibox/internal/infrastructure/engine"
+	"github.com/Black0Bag/minibox/internal/infrastructure/storage"
 )
 
 // sessionHub 会话管理器（内存实现，崩溃续跑留 Phase 8）。
 type sessionHub struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
-	agent    *engine.Engine
-	compiler memory.Compiler
+	mu          sync.RWMutex
+	sessions    map[string]*Session
+	pendingRuns map[string]string // run_id → session_id（等待审批的运行）
+	agent       *engine.Engine
+	compiler    memory.Compiler
+	runStore    *storage.RunStore // 会话持久化（nil = 纯内存模式）
 	// publish 可选事件推送器（SSE 对话流，阶段 1.3）
 	publish func(sessionID, typ string, data any)
 }
@@ -45,13 +50,67 @@ type Message struct {
 // newSessionHub 创建会话 hub。
 func newSessionHub(a *engine.Engine, c memory.Compiler) *sessionHub {
 	return &sessionHub{
-		sessions: make(map[string]*Session),
-		agent:    a,
-		compiler: c,
+		sessions:    make(map[string]*Session),
+		pendingRuns: make(map[string]string),
+		agent:       a,
+		compiler:    c,
 	}
 }
 
-// SetPublisher 注入事件推送器（SSE 对话流）。
+// SetRunStore 注入运行持久化存储（会话持久化）。
+func (h *sessionHub) SetRunStore(rs *storage.RunStore) {
+	h.runStore = rs
+}
+
+// RestoreSessions 启动时从数据库恢复最近会话。
+func (h *sessionHub) RestoreSessions(logger *slog.Logger) {
+	if h.runStore == nil {
+		return
+	}
+	sessions, err := h.runStore.LoadRecentSessions(50)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("恢复会话失败", "err", err)
+		}
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for sessionID, msgs := range sessions {
+		s := &Session{
+			ID:        sessionID,
+			Title:     "历史对话",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Mode:      agent.ModePlan,
+			Messages:  make([]Message, 0, len(msgs)),
+		}
+		for _, m := range msgs {
+			s.Messages = append(s.Messages, Message{
+				Role:    m.Role,
+				Content: m.Content,
+				RunID:   m.RunID,
+				At:      m.At,
+			})
+		}
+		h.sessions[sessionID] = s
+	}
+	if logger != nil && len(sessions) > 0 {
+		logger.Info("会话持久化恢复完成", "sessions", len(sessions))
+	}
+}
+
+// persistMessage 将消息写入 conversation_log（runStore 非 nil 时）。
+func (h *sessionHub) persistMessage(sessionID, runID, role, content string) {
+	if h.runStore == nil {
+		return
+	}
+	if err := h.runStore.LogConversation(sessionID, runID, role, content, 0, nil); err != nil && h.publish != nil {
+		// 持久化失败不阻断流程，只记日志（publish 为 nil 时跳过）
+		_ = err
+	}
+}
 func (h *sessionHub) SetPublisher(p func(sessionID, typ string, data any)) {
 	h.publish = p
 }
@@ -98,8 +157,9 @@ func (h *sessionHub) Delete(id string) {
 	delete(h.sessions, id)
 }
 
-// Send 发送用户消息，驱动 agent 运行直到结束。
-// 返回最终回答与运行信息。
+// Send 发送用户消息，启动一次 Agent 运行（异步）。
+// 返回 run_id；结果通过 SSE 推送。
+// 审批等待时暂停驱动，由 SubmitApproval 外部恢复。
 func (h *sessionHub) Send(ctx context.Context, sessionID, text string) (string, error) {
 	s, ok := h.Get(sessionID)
 	if !ok {
@@ -112,13 +172,14 @@ func (h *sessionHub) Send(ctx context.Context, sessionID, text string) (string, 
 		Content: text,
 		At:      time.Now().Format(time.RFC3339),
 	})
+	h.persistMessage(sessionID, "", "user", text)
 	if h.publish != nil {
 		h.publish(sessionID, "agent.message.user", map[string]string{"content": text})
 	}
 
 	if h.agent == nil {
 		s.UpdatedAt = time.Now()
-		return "Agent 引擎未装配", nil
+		return "", fmt.Errorf("Agent 引擎未装配")
 	}
 
 	// 历史消息（转 llm.Message）
@@ -141,6 +202,11 @@ func (h *sessionHub) Send(ctx context.Context, sessionID, text string) (string, 
 		return "", err
 	}
 
+	// 注册到 pending runs（供审批 API 查找）
+	h.mu.Lock()
+	h.pendingRuns[run.ID] = sessionID
+	h.mu.Unlock()
+
 	// 发布运行开始事件（SSE）
 	if h.publish != nil {
 		h.publish(sessionID, engine.EventRunStarted, map[string]string{
@@ -148,70 +214,125 @@ func (h *sessionHub) Send(ctx context.Context, sessionID, text string) (string, 
 		})
 	}
 
-	// 推进状态机直到终结
+	// 异步驱动状态机
+	go h.driveRun(context.Background(), sessionID, run)
+
+	return run.ID, nil
+}
+
+// driveRun 异步推进 Agent 状态机直到终结或等待审批。
+func (h *sessionHub) driveRun(ctx context.Context, sessionID string, run *agent.Run) {
 	for run.State == agent.StatePlanning || run.State == agent.StateActing {
-		// 发布步骤开始事件（SSE）
 		if h.publish != nil {
 			h.publish(sessionID, engine.EventStepStarted, map[string]any{
 				"run_id": run.ID, "step": run.Steps, "state": string(run.State),
 			})
 		}
-		run, err = h.agent.Step(ctx, run.ID)
+		run, err := h.agent.Step(ctx, run.ID)
 		if err != nil {
-			return "", err
+			break
 		}
-		// 发布步骤完成事件（SSE）
 		if h.publish != nil {
 			h.publish(sessionID, engine.EventStepFinished, map[string]any{
 				"run_id": run.ID, "step": run.Steps, "state": string(run.State),
 			})
 		}
-		// 需要批准时发布事件，然后默认拒绝并让 LLM 换方案（避免卡死）
+
+		// 等待审批：暂停驱动，发布事件等外部提交
 		if run.State == agent.StateAwaitingApproval {
+			toolName := ""
+			if run.PendingTool != nil {
+				toolName = run.PendingTool.Name
+			}
 			if h.publish != nil {
-				toolName := ""
-				if run.PendingTool != nil {
-					toolName = run.PendingTool.Name
-				}
 				h.publish(sessionID, engine.EventApprovalRequested, map[string]string{
 					"run_id": run.ID, "tool_name": toolName,
 				})
 			}
-			run, _ = h.agent.Approve(ctx, run.ID, false)
+			return // 暂停，等 SubmitApproval 恢复
 		}
-		if run.State == agent.StateFailed {
+
+		if run.State == agent.StateFailed || run.State == agent.StateDone {
 			break
 		}
 	}
+	h.finishRun(sessionID, run)
+}
 
-	// 发布运行完成事件（SSE）
+// finishRun 发布完成/失败事件并更新会话。
+func (h *sessionHub) finishRun(sessionID string, run *agent.Run) {
 	if h.publish != nil {
 		h.publish(sessionID, engine.EventRunFinished, map[string]any{
 			"run_id": run.ID, "state": string(run.State), "steps": run.Steps,
 		})
 	}
 
-	answer := run.Answer
-	if run.State == agent.StateFailed {
-		answer = "（运行失败）" + run.Error
-	}
-	if answer == "" {
-		answer = "（无回答）"
+	s, ok := h.Get(sessionID)
+	if !ok {
+		return
 	}
 
-	s.Messages = append(s.Messages, Message{
-		Role:    "assistant",
-		Content: answer,
-		RunID:   run.ID,
-		At:      time.Now().Format(time.RFC3339),
-	})
+	if run.State == agent.StateFailed {
+		if h.publish != nil {
+			h.publish(sessionID, "agent.run_failed", map[string]string{
+				"run_id": run.ID, "error": run.Error,
+			})
+		}
+		return
+	}
+
+	if run.Answer != "" {
+		s.Messages = append(s.Messages, Message{
+			Role:    "assistant",
+			Content: run.Answer,
+			RunID:   run.ID,
+			At:      time.Now().Format(time.RFC3339),
+		})
+		h.persistMessage(sessionID, run.ID, "assistant", run.Answer)
+	}
 	s.UpdatedAt = time.Now()
-	if h.publish != nil {
+	if h.publish != nil && run.Answer != "" {
 		h.publish(sessionID, "agent.message.assistant", map[string]string{
-			"run_id": run.ID, "content": answer,
+			"run_id": run.ID, "content": run.Answer,
 		})
 	}
-	return answer, nil
+}
+
+// SubmitApproval 提交审批决定并恢复驱动。
+func (h *sessionHub) SubmitApproval(ctx context.Context, runID string, approved bool) error {
+	h.mu.RLock()
+	sessionID, ok := h.pendingRuns[runID]
+	h.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("运行不存在或不在等待审批状态: %s", runID)
+	}
+
+	run, err := h.agent.Approve(ctx, runID, approved)
+	if err != nil {
+		return err
+	}
+
+	// 清理 pending 记录
+	h.mu.Lock()
+	delete(h.pendingRuns, runID)
+	h.mu.Unlock()
+
+	// 发布审批结果事件
+	if h.publish != nil {
+		h.publish(sessionID, "agent.approval_result", map[string]any{
+			"run_id": runID, "approved": approved, "state": string(run.State),
+		})
+	}
+
+	// 如果批准了，恢复异步驱动
+	if approved && run.State == agent.StateActing {
+		go h.driveRun(ctx, sessionID, run)
+	} else if !approved {
+		// 拒绝后回到 planning，继续驱动
+		go h.driveRun(ctx, sessionID, run)
+	}
+
+	return nil
 }
 
 // Rewind 回退到指定消息数（rewind 端点）。

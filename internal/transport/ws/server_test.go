@@ -163,10 +163,49 @@ func TestPrefixRoute(t *testing.T) {
 	}
 }
 
-// TestBroadcast 广播 event.push。
+func TestNoResultResponseIncludesNullResult(t *testing.T) {
+	srv := New(slog.New(slog.DiscardHandler))
+	srv.Handle("device", func(_ context.Context, _ *Client, _ json.RawMessage) (any, error) {
+		return nil, nil
+	})
+	conn, _ := newTestWSClient(t, srv)
+	if _, code, err := sendReq(t, conn, 1, "connect", nil); err != nil || code != 0 {
+		t.Fatalf("握手失败: err=%v code=%d", err, code)
+	}
+	resp, code, err := sendReq(t, conn, 2, "device.screen.capture", nil)
+	if err != nil || code != 0 {
+		t.Fatalf("调用失败: err=%v code=%d resp=%v", err, code, resp)
+	}
+	if result, ok := resp["result"]; !ok || result != nil {
+		t.Fatalf("无结果请求应返回 result:null，实际: %v", resp)
+	}
+}
+func TestUnknownMethodNotificationDoesNotReply(t *testing.T) {
+	srv := New(slog.New(slog.DiscardHandler))
+	conn, _ := newTestWSClient(t, srv)
+	if _, code, err := sendReq(t, conn, 1, "connect", map[string]any{"client": "notify-test", "protocol": "1.0"}); err != nil || code != 0 {
+		t.Fatalf("握手失败: err=%v code=%d", err, code)
+	}
+	if err := wsjson.Write(context.Background(), conn, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "unknown.method",
+	}); err != nil {
+		t.Fatalf("写入通知失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	var msg map[string]any
+	if err := wsjson.Read(ctx, conn, &msg); err == nil {
+		t.Fatalf("未知方法通知不应收到 JSON-RPC 响应，实际: %v", msg)
+	}
+}
+
 func TestBroadcast(t *testing.T) {
 	srv := New(slog.New(slog.DiscardHandler))
 	conn, _ := newTestWSClient(t, srv)
+	if _, code, err := sendReq(t, conn, 1, "connect", map[string]any{"client": "broadcast-test", "protocol": "1.0"}); err != nil || code != 0 {
+		t.Fatalf("握手失败: err=%v code=%d", err, code)
+	}
 	// 等待 Handler goroutine 注册客户端到 s.clients
 	time.Sleep(50 * time.Millisecond)
 	srv.Broadcast(context.Background(), "system.degrade", map[string]string{"level": "L1"})

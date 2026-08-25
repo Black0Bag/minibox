@@ -13,9 +13,43 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+
+	"github.com/Black0Bag/minibox/internal/transport"
 )
 
-func testHub(t *testing.T) (*Hub, *websocket.Conn) {
+type testRPCClient struct {
+	conn *websocket.Conn
+}
+
+func (c *testRPCClient) SendRequest(ctx context.Context, id, method string, params json.RawMessage) (transport.RPCResponse, error) {
+	req := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  method,
+	}
+	if len(params) > 0 && string(params) != "null" {
+		req["params"] = json.RawMessage(params)
+	}
+	if err := wsjson.Write(ctx, c.conn, req); err != nil {
+		return transport.RPCResponse{}, err
+	}
+	var resp struct {
+		Result json.RawMessage     `json:"result,omitempty"`
+		Error  *transport.RPCError `json:"error,omitempty"`
+	}
+	if err := wsjson.Read(ctx, c.conn, &resp); err != nil {
+		return transport.RPCResponse{}, err
+	}
+	return transport.RPCResponse{Result: resp.Result, Error: resp.Error}, nil
+}
+
+func (c *testRPCClient) Close() error {
+	return c.conn.Close(websocket.StatusNormalClosure, "test done")
+}
+
+var _ transport.RPCClient = (*testRPCClient)(nil)
+
+func testHub(t *testing.T) (*Hub, *testRPCClient) {
 	t.Helper()
 	h := NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
@@ -51,7 +85,7 @@ func testHub(t *testing.T) (*Hub, *websocket.Conn) {
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "test done") })
 
-	return h, conn
+	return h, &testRPCClient{conn: conn}
 }
 
 func TestHub_设备连接与列表(t *testing.T) {
@@ -169,8 +203,9 @@ func TestHub_SendCommand_设备错误响应(t *testing.T) {
 		t.Fatalf("Dial 失败: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "done") })
+	client := &testRPCClient{conn: conn}
 
-	if _, err := h.HandleConnect(ctx, conn, "dev-1", "Pixel 8", "14", nil, nil); err != nil {
+	if _, err := h.HandleConnect(ctx, client, "dev-1", "Pixel 8", "14", nil, nil); err != nil {
 		t.Fatalf("HandleConnect 失败: %v", err)
 	}
 

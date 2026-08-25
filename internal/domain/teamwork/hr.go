@@ -34,13 +34,13 @@ func (l ApprovalLevel) String() string {
 // StaffingRequest 增派申请。
 type StaffingRequest struct {
 	// TaskID 关联任务。
-	TaskID string
+	TaskID string `json:"task_id"`
 	// Reason 增派理由（组长填写：为什么缺人）。
-	Reason string
+	Reason string `json:"reason"`
 	// RoleCardID 需要的角色卡 ID（模板库命中则非空）。
-	RoleCardID string
+	RoleCardID string `json:"role_card_id"`
 	// Permanent 是否申请永久入职（否则临时组队）。
-	Permanent bool
+	Permanent bool `json:"permanent"`
 }
 
 // StaffingDecision 审批决策。

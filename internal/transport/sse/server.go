@@ -44,6 +44,10 @@ type Server struct {
 	mu        sync.RWMutex
 	streams   map[string]*Stream
 	keepAlive time.Duration
+	// nextSeq 是每个会话独立的单调序号，即使暂时没有订阅者也继续递增。
+	nextSeq map[string]int
+	// history 保存最近事件，供 Last-Event-ID 断线续传；按 session 隔离。
+	history map[string][]*transport.Envelope
 }
 
 // New 创建 SSE 服务器。
@@ -52,6 +56,8 @@ func New(logger *slog.Logger) *Server {
 		logger:    logger,
 		streams:   make(map[string]*Stream),
 		keepAlive: defaultKeepAlive,
+		nextSeq:   make(map[string]int),
+		history:   make(map[string][]*transport.Envelope),
 	}
 }
 
@@ -69,6 +75,8 @@ func (s *Server) Handler() http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache, no-transform")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
+		// 立即发送状态行和 SSE 头，避免客户端在首个业务事件前阻塞握手。
+		flusher.Flush()
 
 		sessionID := r.URL.Query().Get("session_id")
 		if sessionID == "" {
@@ -77,11 +85,15 @@ func (s *Server) Handler() http.HandlerFunc {
 
 		// 断线续传：客户端 Last-Event-ID 头 → 从 seq+1 开始
 		lastID, _ := strconv.Atoi(r.Header.Get("Last-Event-ID"))
-		startSeq := lastID + 1
-
-		// 注册流
-		stream := s.subscribe(sessionID, startSeq)
+		sub := s.subscribeWithReplay(sessionID, lastID)
+		stream := sub.stream
 		defer s.unsubscribe(sessionID, stream)
+
+		// 历史快照与流注册在同一把锁内完成，之后只消费实时队列。
+		for _, env := range sub.replay {
+			s.writeEvent(w, flusher, env)
+		}
+		startSeq := sub.startSeq
 
 		// 建立请求上下文（客户端断开时结束）
 		ctx := r.Context()
@@ -94,6 +106,8 @@ func (s *Server) Handler() http.HandlerFunc {
 			select {
 			case <-ctx.Done():
 				return // 客户端断开
+			case <-stream.done:
+				return // 被同 session 的新订阅替换
 			case env, ok := <-stream.ch:
 				if !ok {
 					return // 流关闭
@@ -124,51 +138,109 @@ func (s *Server) writeEvent(w http.ResponseWriter, flusher http.Flusher, env *tr
 	flusher.Flush()
 }
 
-// subscribe 注册流并返回。
+// subscribe 注册流并返回。测试和内部调用只需要流本身时使用此包装。
 func (s *Server) subscribe(sessionID string, startSeq int) *Stream {
+	return s.subscribeWithReplay(sessionID, startSeq-1).stream
+}
+
+type replaySubscription struct {
+	stream   *Stream
+	replay   []*transport.Envelope
+	startSeq int
+}
+
+// subscribeWithReplay 原子地注册流并截取历史，避免历史回放与实时 Publish 之间出现重复/丢失窗口。
+func (s *Server) subscribeWithReplay(sessionID string, lastID int) replaySubscription {
+	startSeq := lastID + 1
 	st := &Stream{
 		ch:      make(chan *transport.Envelope, defaultBufferSize),
-		lastSeq: startSeq - 1,
+		lastSeq: lastID,
 		done:    make(chan struct{}),
 	}
+
 	s.mu.Lock()
+	if startSeq > s.nextSeq[sessionID] {
+		s.nextSeq[sessionID] = lastID
+	}
+	if old := s.streams[sessionID]; old != nil {
+		// 同一 session 的新连接替换旧连接；旧 Handler 会因 done/ctx 退出。
+		close(old.done)
+	}
 	s.streams[sessionID] = st
+
+	replay := make([]*transport.Envelope, 0, len(s.history[sessionID]))
+	for _, env := range s.history[sessionID] {
+		if env.Seq <= lastID {
+			continue
+		}
+		cp := *env
+		replay = append(replay, &cp)
+	}
 	s.mu.Unlock()
-	return st
+
+	return replaySubscription{stream: st, replay: replay, startSeq: startSeq}
+}
+
+// replay 返回指定会话中 seq 大于 lastID 的历史事件副本。
+func (s *Server) replay(sessionID string, lastID int) []*transport.Envelope {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	history := s.history[sessionID]
+	out := make([]*transport.Envelope, 0, len(history))
+	for _, env := range history {
+		if env.Seq <= lastID {
+			continue
+		}
+		cp := *env
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// appendHistory 在锁内保存有限历史，超出窗口时丢弃最旧事件。
+func (s *Server) appendHistoryLocked(sessionID string, env *transport.Envelope) {
+	history := append(s.history[sessionID], env)
+	if len(history) > defaultBufferSize {
+		history = history[len(history)-defaultBufferSize:]
+	}
+	s.history[sessionID] = history
 }
 
 // unsubscribe 注销流。
 func (s *Server) unsubscribe(sessionID string, st *Stream) {
-	close(st.done)
 	s.mu.Lock()
 	if s.streams[sessionID] == st {
 		delete(s.streams, sessionID)
+		s.mu.Unlock()
+		close(st.done)
+		return
 	}
 	s.mu.Unlock()
 }
 
 // Publish 向指定会话推送事件（B14 主动推送）。
+// 即使当前没有订阅者，事件也会进入有限历史缓冲，供客户端重连时回放。
 func (s *Server) Publish(sessionID, producer, typ string, data any) error {
 	env, err := transport.NewEnvelope(producer, "minibox://session/"+sessionID, typ, data)
 	if err != nil {
 		return err
 	}
-	s.mu.RLock()
-	st, ok := s.streams[sessionID]
-	s.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("会话 %s 未订阅", sessionID)
+
+	s.mu.Lock()
+	s.nextSeq[sessionID]++
+	env.Seq = s.nextSeq[sessionID]
+	s.appendHistoryLocked(sessionID, env)
+	st := s.streams[sessionID]
+	s.mu.Unlock()
+	if st == nil {
+		return nil
 	}
-	st.mu.Lock()
-	st.lastSeq++
-	env.Seq = st.lastSeq
-	st.mu.Unlock()
+
 	select {
 	case st.ch <- env:
 		return nil
 	default:
-		// 缓冲满 → 丢事件（背压，客户端断线重连时 sync-required）
-		return fmt.Errorf("会话 %s 缓冲满，事件丢弃", sessionID)
+		return fmt.Errorf("会话 %s 缓冲满，事件已写入续传历史", sessionID)
 	}
 }
 

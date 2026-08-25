@@ -120,10 +120,10 @@ func (c *TeamCatalog) Match(need string) []Team {
 func presetTeams() []Team {
 	return []Team{
 		{
-			ID:   "engineering",
-			Name: "编程团队",
+			ID:          "engineering",
+			Name:        "编程团队",
 			Description: "软件开发、代码编写、调试、架构设计",
-			Keywords:    []string{"编程", "代码", "开发", "程序", "bug", "调试", "架构", "软件"},
+			Keywords:    []string{"编程", "代码", "开发", "程序", "bug", "调试", "架构", "软件", "go", "golang", "api", "接口", "后端", "前端", "rest", "http", "测试", "test"},
 			LeadRole: NewRoleCard("lead_engineering", "技术组长",
 				"技术团队的负责人，负责任务拆解、技术方案裁决、进度协调。",
 				"不得直接编写业务代码（专注协调与裁决）；不得绕过用户修改需求。",
@@ -148,8 +148,8 @@ func presetTeams() []Team {
 			},
 		},
 		{
-			ID:   "writing",
-			Name: "创作团队",
+			ID:          "writing",
+			Name:        "创作团队",
 			Description: "文案创作、内容撰写、审校",
 			Keywords:    []string{"文案", "创作", "文章", "内容", "校对", "审校", "编辑", "稿件"},
 			LeadRole: NewRoleCard("lead_writing", "主编",
@@ -176,8 +176,8 @@ func presetTeams() []Team {
 			},
 		},
 		{
-			ID:   "office",
-			Name: "办公团队",
+			ID:          "office",
+			Name:        "办公团队",
 			Description: "文档整理、表格处理、汇报撰写",
 			Keywords:    []string{"文档", "表格", "办公", "汇报", "整理", "ppt", "excel", "word", "会议纪要"},
 			LeadRole: NewRoleCard("lead_office", "项目协调员",
@@ -204,8 +204,8 @@ func presetTeams() []Team {
 			},
 		},
 		{
-			ID:   "life",
-			Name: "生活团队",
+			ID:          "life",
+			Name:        "生活团队",
 			Description: "生活建议、信息查证、资源推荐",
 			Keywords:    []string{"生活", "旅游", "健康", "饮食", "购物", "推荐", "建议", "生活指南"},
 			LeadRole: NewRoleCard("lead_life", "生活顾问",
@@ -227,8 +227,8 @@ func presetTeams() []Team {
 			},
 		},
 		{
-			ID:   "research",
-			Name: "研究分析团队",
+			ID:          "research",
+			Name:        "研究分析团队",
 			Description: "市场调研、数据分析、研究报告",
 			Keywords:    []string{"研究", "分析", "调研", "报告", "数据", "市场", "趋势", "论文"},
 			LeadRole: NewRoleCard("lead_research", "研究主管",
@@ -255,8 +255,8 @@ func presetTeams() []Team {
 			},
 		},
 		{
-			ID:   "data",
-			Name: "数据处理团队",
+			ID:          "data",
+			Name:        "数据处理团队",
 			Description: "数据清洗、统计分析、可视化",
 			Keywords:    []string{"数据", "清洗", "统计", "可视化", "图表", "分析", "处理"},
 			LeadRole: NewRoleCard("lead_data", "数据主管",
@@ -283,8 +283,8 @@ func presetTeams() []Team {
 			},
 		},
 		{
-			ID:   "media",
-			Name: "媒体制作团队",
+			ID:          "media",
+			Name:        "媒体制作团队",
 			Description: "图片、视频、音频等媒体制作",
 			Keywords:    []string{"图片", "视频", "音频", "媒体", "制作", "设计", "剪辑", "海报"},
 			LeadRole: NewRoleCard("lead_media", "制作总监",
@@ -311,8 +311,8 @@ func presetTeams() []Team {
 			},
 		},
 		{
-			ID:   "automation",
-			Name: "自动化团队",
+			ID:          "automation",
+			Name:        "自动化团队",
 			Description: "流程自动化、脚本编写、测试验证",
 			Keywords:    []string{"自动化", "脚本", "流程", "批量", "定时", "机器人", "工作流"},
 			LeadRole: NewRoleCard("lead_automation", "自动化架构师",

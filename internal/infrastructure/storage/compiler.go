@@ -7,22 +7,30 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 )
 
+// KnowledgeExtractor 将原始输入提炼为可直接入库的结构化知识条目。
+// 实现由 app 层注入，可使用功能级 LLM 路由；失败时编译器安全降级为原文切块。
+type KnowledgeExtractor interface {
+	Extract(ctx context.Context, source string) ([]memory.Entry, error)
+}
+
 // SQLiteCompiler 编译管道实现（B12）。
 // 状态机：PENDING→PROCESSING→READY/FAILED，单调不后退（SmartSearch 实证）。
 // 流程：解析→切块→embedding（若配置）→入库（Store.Embed 写向量）。
 // embedding 不可用时降级纯文本入库（向量检索自动降级 FTS5→LIKE）。
 type SQLiteCompiler struct {
-	db       *sql.DB
-	store    memory.Store
-	mu       sync.Mutex
-	jobs     map[string]*memory.CompileJob // 内存作业表（暂用，Phase 3 落表）
-	embedder Embedder                      // 可选 embedding 客户端
+	db        *sql.DB
+	store     memory.Store
+	mu        sync.Mutex
+	jobs      map[string]*memory.CompileJob // 内存作业表（暂用，Phase 3 落表）
+	embedder  Embedder                      // 可选 embedding 客户端
+	extractor KnowledgeExtractor            // 可选 LLM 结构化提炼器
 }
 
 // Embedder 文本向量化接口（组合根注入）。
@@ -39,6 +47,11 @@ func NewCompiler(db *sql.DB, store memory.Store) *SQLiteCompiler {
 		store: store,
 		jobs:  make(map[string]*memory.CompileJob),
 	}
+}
+
+// SetKnowledgeExtractor 注入可选的 LLM 结构化提炼器。
+func (c *SQLiteCompiler) SetKnowledgeExtractor(e KnowledgeExtractor) {
+	c.extractor = e
 }
 
 // SetEmbedder 注入 embedding 客户端（阶段 2.1 接通向量检索）。
@@ -73,19 +86,38 @@ func (c *SQLiteCompiler) Compile(ctx context.Context, source string, opts memory
 // 流程：切块 → 逐块入库 → embedding 可用时写入向量（Store.Embed）。
 // 每 chunk 独立 hash（hashSource(chunk)），确保 GetIDByHash 返回正确行、向量不覆盖。
 func (c *SQLiteCompiler) process(ctx context.Context, jobID, source string, opts memory.CompileOptions) {
-	chunks := chunkSource(source, opts.MaxChunkTokens)
-	c.updateStatus(jobID, memory.JobProcessing, 0, len(chunks), "")
+	entries := make([]memory.Entry, 0)
+	for _, chunk := range chunkSource(source, opts.MaxChunkTokens) {
+		entries = append(entries, memory.Entry{Content: chunk, Source: source, Importance: 0.5})
+	}
+	if c.extractor != nil {
+		structured, err := c.extractor.Extract(ctx, source)
+		if err == nil && len(structured) > 0 {
+			entries = entries[:0]
+			for _, entry := range structured {
+				if strings.TrimSpace(entry.Content) == "" {
+					continue
+				}
+				entry.Source = source
+				entries = append(entries, entry)
+			}
+			if len(entries) == 0 {
+				for _, chunk := range chunkSource(source, opts.MaxChunkTokens) {
+					entries = append(entries, memory.Entry{Content: chunk, Source: source, Importance: 0.5})
+				}
+			}
+		}
+	}
+	c.updateStatus(jobID, memory.JobProcessing, 0, len(entries), "")
 
-	for i, chunk := range chunks {
-		chunkHash := hashSource(chunk)
-		// 入库（纯文本，向量降级可检索）
-		if err := c.store.Upsert(ctx, memory.Entry{
-			Content:    chunk,
-			Source:     source,
-			SourceHash: chunkHash,
-			Importance: 0.5,
-		}); err != nil {
-			c.updateStatus(jobID, memory.JobFailed, i, len(chunks), err.Error())
+	for i, entry := range entries {
+		chunkHash := hashSource(entry.Content)
+		entry.SourceHash = chunkHash
+		if entry.Importance <= 0 {
+			entry.Importance = 0.5
+		}
+		if err := c.store.Upsert(ctx, entry); err != nil {
+			c.updateStatus(jobID, memory.JobFailed, i, len(entries), err.Error())
 			return
 		}
 
@@ -93,22 +125,21 @@ func (c *SQLiteCompiler) process(ctx context.Context, jobID, source string, opts
 		if c.embedder != nil {
 			id, err := c.store.GetIDByHash(ctx, chunkHash)
 			if err == nil && id > 0 {
-				vecs, err := c.embedder.EmbedBatch(ctx, []string{chunk})
+				vecs, err := c.embedder.EmbedBatch(ctx, []string{entry.Content})
 				if err != nil {
-					c.updateStatus(jobID, memory.JobProcessing, i, len(chunks), "向量生成失败: "+err.Error())
+					c.updateStatus(jobID, memory.JobProcessing, i, len(entries), "向量生成失败: "+err.Error())
 				} else if len(vecs) == 1 {
 					if err := c.store.Embed(ctx, id, memory.TierStore, vecs[0]); err != nil {
-						// 向量写入失败不阻断编译（文本检索仍可用），记录到 job 进度
-						c.updateStatus(jobID, memory.JobProcessing, i, len(chunks), "向量写入失败: "+err.Error())
+						c.updateStatus(jobID, memory.JobProcessing, i, len(entries), "向量写入失败: "+err.Error())
 					}
 				}
 			}
 		}
 
-		c.updateStatus(jobID, memory.JobProcessing, i+1, len(chunks), "")
+		c.updateStatus(jobID, memory.JobProcessing, i+1, len(entries), "")
 	}
 
-	c.updateStatus(jobID, memory.JobReady, len(chunks), len(chunks), "")
+	c.updateStatus(jobID, memory.JobReady, len(entries), len(entries), "")
 }
 
 // chunkSource 源文本切块（按 opts.MaxChunkTokens 估算，默认每块约 40 行）。

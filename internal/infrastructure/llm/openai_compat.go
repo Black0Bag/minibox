@@ -3,6 +3,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -56,7 +57,7 @@ func (c *OpenAICompat) Name() string { return c.name }
 type chatCompletionReq struct {
 	Model            string        `json:"model"`
 	Messages         []chatMessage `json:"messages"`
-	Stream           bool          `json:"stream,omitempty"`
+	Stream           bool          `json:"stream"`
 	MaxTokens        *int          `json:"max_tokens,omitempty"`
 	Temperature      *float64      `json:"temperature,omitempty"`
 	TopP             *float64      `json:"top_p,omitempty"`
@@ -84,6 +85,7 @@ type chatMessage struct {
 // chatToolCall 消息内嵌的工具调用（OpenAI 标准：assistant 消息携带）。
 type chatToolCall struct {
 	ID       string           `json:"id"`
+	Index    int              `json:"index,omitempty"`
 	Type     string           `json:"type"`
 	Function chatToolCallFunc `json:"function"`
 }
@@ -131,7 +133,7 @@ func (c *OpenAICompat) Complete(ctx context.Context, req llm.Request) (*llm.Resp
 		return nil, err
 	}
 
-	respBody, statusCode, err := c.do(ctx, "/chat/completions", body)
+	respBody, statusCode, contentType, err := c.do(ctx, "/chat/completions", body)
 	if err != nil {
 		return nil, err
 	}
@@ -139,18 +141,23 @@ func (c *OpenAICompat) Complete(ctx context.Context, req llm.Request) (*llm.Resp
 	if statusCode != http.StatusOK {
 		return nil, llm.ClassifyError(statusCode, string(respBody))
 	}
+	if isEventStream(contentType, respBody) {
+		return parseCompletionSSE(bytes.NewReader(respBody))
+	}
+	return parseCompletionJSON(respBody)
+}
 
+// parseCompletionJSON 将标准非流式 Chat Completions JSON 响应归一化。
+func parseCompletionJSON(body []byte) (*llm.Response, error) {
 	var resp chatCompletionResp
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("解析 OpenAI 响应失败: %w", err)
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("解析 OpenAI JSON 响应失败: %w", err)
 	}
-
 	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("OpenAI 响应无 choices")
+		return nil, fmt.Errorf("OpenAI JSON 响应无 choices")
 	}
-	choice := resp.Choices[0]
 
-	// 归一化输出
+	choice := resp.Choices[0]
 	out := &llm.Response{
 		Content:      choice.Message.Content,
 		Reasoning:    choice.Message.Reasoning,
@@ -162,7 +169,6 @@ func (c *OpenAICompat) Complete(ctx context.Context, req llm.Request) (*llm.Resp
 			TotalTokens:  resp.Usage.TotalTokens,
 		},
 	}
-
 	for _, tc := range choice.Message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
 			ID:        tc.ID,
@@ -170,11 +176,109 @@ func (c *OpenAICompat) Complete(ctx context.Context, req llm.Request) (*llm.Resp
 			Arguments: tc.Function.Arguments,
 		})
 	}
-
 	return out, nil
 }
 
-// buildRequest 构建 chat/completions 请求体。
+// isEventStream 判断供应商是否以 SSE 形式返回 Chat Completions。
+// 某些“OpenAI 兼容”供应商即使接收到 stream=false 仍返回 data: SSE；
+// 此处仅做兼容解析，不改变标准 stream=true 的公开行为。
+func isEventStream(contentType string, body []byte) bool {
+	if strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
+		return true
+	}
+	return bytes.HasPrefix(bytes.TrimSpace(body), []byte("data:"))
+}
+
+// parseCompletionSSE 聚合 data-only SSE Chat Completion chunks 为非流式响应。
+func parseCompletionSSE(r io.Reader) (*llm.Response, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	out := &llm.Response{}
+	toolCalls := make(map[string]*llm.ToolCall)
+	toolIndexes := make(map[int]string)
+	var toolOrder []string
+	seenChunk := false
+	seenDone := false
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
+		}
+		if data == "[DONE]" {
+			seenDone = true
+			break
+		}
+
+		var chunk chatCompletionStreamResp
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return nil, fmt.Errorf("解析 OpenAI SSE chunk 失败: %w", err)
+		}
+		seenChunk = true
+		if chunk.Model != "" {
+			out.Model = chunk.Model
+		}
+		if chunk.Usage != nil {
+			out.Usage = llm.Usage{
+				InputTokens:  chunk.Usage.PromptTokens,
+				OutputTokens: chunk.Usage.CompletionTokens,
+				TotalTokens:  chunk.Usage.TotalTokens,
+			}
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		choice := chunk.Choices[0]
+		delta := choice.Delta
+		out.Content += delta.Content
+		out.Reasoning += delta.Reasoning
+		if choice.FinishReason != nil {
+			out.FinishReason = *choice.FinishReason
+		}
+		for _, tc := range delta.ToolCalls {
+			callID := tc.ID
+			if callID == "" && tc.Index >= 0 {
+				callID = toolIndexes[tc.Index]
+			}
+			if callID == "" {
+				return nil, fmt.Errorf("OpenAI SSE tool_call 缺少 id")
+			}
+			if tc.Index >= 0 {
+				toolIndexes[tc.Index] = callID
+			}
+			acc, ok := toolCalls[callID]
+			if !ok {
+				acc = &llm.ToolCall{ID: callID, Name: tc.Function.Name}
+				toolCalls[callID] = acc
+				toolOrder = append(toolOrder, callID)
+			}
+			if tc.Function.Name != "" {
+				acc.Name = tc.Function.Name
+			}
+			acc.Arguments += tc.Function.Arguments
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("读取 OpenAI SSE 响应失败: %w", err)
+	}
+	if !seenChunk {
+		return nil, fmt.Errorf("OpenAI SSE 响应无有效 chunk")
+	}
+	if !seenDone {
+		return nil, fmt.Errorf("OpenAI SSE 响应缺少 [DONE]")
+	}
+	for _, id := range toolOrder {
+		out.ToolCalls = append(out.ToolCalls, *toolCalls[id])
+	}
+	return out, nil
+}
+
 func (c *OpenAICompat) buildRequest(req llm.Request, stream bool) ([]byte, error) {
 	messages := make([]chatMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
@@ -274,24 +378,26 @@ func (c *OpenAICompat) buildRequest(req llm.Request, stream bool) ([]byte, error
 }
 
 // do 发送 HTTP 请求。
-func (c *OpenAICompat) do(ctx context.Context, path string, body []byte) ([]byte, int, error) {
+func (c *OpenAICompat) do(ctx context.Context, path string, body []byte) ([]byte, int, string, error) {
 	url := c.baseURL + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, fmt.Errorf("构建请求失败: %w", err)
+		return nil, 0, "", fmt.Errorf("构建请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKeys[0])
+	if len(c.apiKeys) > 0 && c.apiKeys[0] != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKeys[0])
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.StatusCode, resp.Header.Get("Content-Type"), err
 	}
-	return respBody, resp.StatusCode, nil
+	return respBody, resp.StatusCode, resp.Header.Get("Content-Type"), nil
 }

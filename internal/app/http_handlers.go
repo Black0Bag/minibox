@@ -79,6 +79,9 @@ func (a *App) mountREST(r chi.Router) {
 		r.Post("/apply", a.handleUpgradeApply)
 	})
 
+	// 审批域
+	r.Post("/api/v1/approvals/{run_id}", a.handleApprovalSubmit)
+
 	// 健康检查（Kubernetes 探针规范：liveness 轻量，readiness 含依赖检查）
 	r.Get("/api/v1/health", a.handleHealth)
 	r.Get("/api/v1/ready", a.handleReady)
@@ -954,6 +957,40 @@ a.respondErr(w, r, http.StatusBadRequest, "conclude_failed", err.Error())
 return
 }
 a.respondOK(w, r, "api.teamwork.conclude", p)
+}
+
+// handleApprovalSubmit 提交 Agent 工具调用审批（P0-2）。
+func (a *App) handleApprovalSubmit(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "run_id")
+	if runID == "" {
+		a.respondErr(w, r, http.StatusBadRequest, "bad_request", "run_id 必填")
+		return
+	}
+	if a.sessions == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "sessions_unavailable", "会话未就绪")
+		return
+	}
+
+	var req struct {
+		Approved bool `json:"approved"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "invalid_json", "请求体解析失败: "+err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	if err := a.sessions.SubmitApproval(ctx, runID, req.Approved); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "approval_failed", err.Error())
+		return
+	}
+
+	a.respondOK(w, r, "api.approvals.submit", map[string]any{
+		"run_id":   runID,
+		"approved": req.Approved,
+	})
 }
 
 // handleTeamStaff 人力增援审批（自进化：人手不足上报）。

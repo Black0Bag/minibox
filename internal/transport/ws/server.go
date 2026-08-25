@@ -11,11 +11,14 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/Black0Bag/minibox/internal/transport"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 )
@@ -40,7 +43,8 @@ type request struct {
 type response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
@@ -57,6 +61,139 @@ type Client struct {
 	Name      string
 	Handshake bool
 	Data      any // 附加数据（设备信息等）
+
+	conn *websocket.Conn
+
+	// writeMu 让本连接的请求和响应按完整 JSON 消息串行写入。
+	// 虽然 coder/websocket 支持并发写，此锁仍避免协议层消息在测试和日志中失序。
+	writeMu sync.Mutex
+
+	pendingMu sync.Mutex
+	pending   map[string]chan rpcReply
+}
+
+type rpcReply struct {
+	Result json.RawMessage
+	Error  *rpcError
+	Err    error
+}
+
+// SendRequest 将一条 JSON-RPC 请求发给客户端，并等待同 id 的响应。
+// Client 的连接读取只能由 Server.Handler 的单一读循环执行；该方法仅注册等待者并写入请求。
+func (c *Client) SendRequest(ctx context.Context, id, method string, params json.RawMessage) (transport.RPCResponse, error) {
+	if c == nil || c.conn == nil {
+		return transport.RPCResponse{}, fmt.Errorf("WebSocket 客户端未连接")
+	}
+	if id == "" {
+		return transport.RPCResponse{}, fmt.Errorf("JSON-RPC 请求 id 不能为空")
+	}
+
+	waiter := make(chan rpcReply, 1)
+	if err := c.registerPending(id, waiter); err != nil {
+		return transport.RPCResponse{}, err
+	}
+	defer c.removePending(id, waiter)
+
+	req := request{JSONRPC: "2.0", ID: json.RawMessage(strconv.Quote(id)), Method: method}
+	if len(params) > 0 && string(params) != "null" {
+		req.Params = append(json.RawMessage(nil), params...)
+	}
+	if err := c.writeJSON(ctx, req); err != nil {
+		return transport.RPCResponse{}, fmt.Errorf("写入 JSON-RPC 请求: %w", err)
+	}
+
+	select {
+	case reply := <-waiter:
+		if reply.Err != nil {
+			return transport.RPCResponse{}, reply.Err
+		}
+		out := transport.RPCResponse{Result: append(json.RawMessage(nil), reply.Result...)}
+		if reply.Error != nil {
+			out.Error = &transport.RPCError{Code: reply.Error.Code, Message: reply.Error.Message}
+			if reply.Error.Data != nil {
+				out.Error.Data, _ = json.Marshal(reply.Error.Data)
+			}
+		}
+		return out, nil
+	case <-ctx.Done():
+		return transport.RPCResponse{}, fmt.Errorf("等待 JSON-RPC 响应: %w", ctx.Err())
+	}
+}
+
+// Close 关闭客户端连接，供设备 Hub 的急停/解绑路径调用。
+func (c *Client) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.Close(websocket.StatusNormalClosure, "closed by server")
+}
+
+var _ transport.RPCRequester = (*Client)(nil)
+
+func (c *Client) registerPending(id string, waiter chan rpcReply) error {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	if c.pending == nil {
+		c.pending = make(map[string]chan rpcReply)
+	}
+	if _, exists := c.pending[id]; exists {
+		return fmt.Errorf("JSON-RPC 请求 id 已在等待中: %s", id)
+	}
+	c.pending[id] = waiter
+	return nil
+}
+
+func (c *Client) removePending(id string, waiter chan rpcReply) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	if c.pending[id] == waiter {
+		delete(c.pending, id)
+	}
+}
+
+func (c *Client) deliverReply(id string, reply rpcReply) bool {
+	c.pendingMu.Lock()
+	waiter, ok := c.pending[id]
+	if ok {
+		delete(c.pending, id)
+	}
+	c.pendingMu.Unlock()
+	if !ok {
+		return false
+	}
+	waiter <- reply
+	return true
+}
+
+func rpcIDKey(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		return str, true
+	}
+	// JSON-RPC 允许数字 id；保留其规范化前的 JSON 文本作为 key。
+	return string(raw), true
+}
+
+func (c *Client) failPending(err error) {
+	c.pendingMu.Lock()
+	pending := c.pending
+	c.pending = make(map[string]chan rpcReply)
+	c.pendingMu.Unlock()
+	for _, waiter := range pending {
+		waiter <- rpcReply{Err: fmt.Errorf("WebSocket 连接已关闭: %w", err)}
+	}
+}
+
+func (c *Client) writeJSON(ctx context.Context, v any) error {
+	if c == nil || c.conn == nil {
+		return fmt.Errorf("WebSocket 客户端未连接")
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return wsjson.Write(ctx, c.conn, v)
 }
 
 // HandlerFunc 处理一个 method 请求。
@@ -98,11 +235,13 @@ func (s *Server) Handler() http.HandlerFunc {
 			s.logger.Warn("WS 握手失败", "err", err)
 			return
 		}
-		cli := &Client{}
+		cli := &Client{conn: c, pending: make(map[string]chan rpcReply)}
+
 		s.mu.Lock()
 		s.clients[c] = cli
 		s.mu.Unlock()
 		defer func() {
+			cli.failPending(fmt.Errorf("WebSocket 连接已关闭"))
 			_ = c.Close(websocket.StatusNormalClosure, "")
 			s.mu.Lock()
 			delete(s.clients, c)
@@ -111,13 +250,31 @@ func (s *Server) Handler() http.HandlerFunc {
 
 		ctx := r.Context()
 		for {
-			// 读 JSON-RPC 消息
-			var req request
-			if err := wsjson.Read(ctx, c, &req); err != nil {
-				// 连接关闭或读错误 → 结束
+			// 读 JSON-RPC 消息。coder/websocket 要求 Reader/Read 不能并发调用；
+			// 因此整个连接只保留这一处读循环。
+			var raw json.RawMessage
+			if err := wsjson.Read(ctx, c, &raw); err != nil {
 				return
 			}
-			// 处理消息（请求或通知）
+
+			// 响应必须先按 id 交给等待中的请求；没有 pending waiter 的消息
+			// 才继续作为来自客户端的请求/通知处理。
+			var resp response
+			if err := json.Unmarshal(raw, &resp); err == nil && len(resp.ID) > 0 && (resp.Result != nil || resp.Error != nil) {
+				if id, ok := rpcIDKey(resp.ID); ok && cli.deliverReply(id, rpcReply{Result: resp.Result, Error: resp.Error}) {
+					continue
+				}
+			}
+
+			var req request
+			if err := json.Unmarshal(raw, &req); err != nil {
+				return
+			}
+			// 已识别为响应但没有对应等待者：可能是超时后到达的迟到回执。
+			// 不把它误当成 method 为空的请求再回一条错误，避免协议回声。
+			if resp.JSONRPC == "2.0" && len(resp.ID) > 0 && resp.Method == "" && (resp.Result != nil || resp.Error != nil) {
+				continue
+			}
 			s.dispatch(ctx, c, cli, req)
 		}
 	}
@@ -135,20 +292,20 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, cli *Client
 		s.handleDisconnect(ctx, conn, cli, req)
 		return
 	case "heartbeat.ping":
-		s.reply(ctx, conn, req, map[string]any{"pong": true})
+		s.reply(ctx, conn, cli, req, map[string]any{"pong": true})
 		return
 	}
 
 	// 其他 method 需先握手（QC3）
 	if !cli.Handshake {
-		s.replyError(ctx, conn, req, codeHandshakeRequired, "handshake_required", nil)
+		s.replyError(ctx, conn, cli, req, codeHandshakeRequired, "handshake_required", nil)
 		return
 	}
 
 	// 路由：精确匹配或前缀
 	fn, ok := s.lookup(req.Method)
 	if !ok {
-		s.replyError(ctx, conn, req, -32601, "method not found", nil)
+		s.replyError(ctx, conn, cli, req, -32601, "method not found", nil)
 		return
 	}
 
@@ -162,10 +319,10 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, cli *Client
 	}
 	result, err := fn(ctx, cli, req.Params)
 	if err != nil {
-		s.replyError(ctx, conn, req, -32603, err.Error(), nil)
+		s.replyError(ctx, conn, cli, req, -32603, err.Error(), nil)
 		return
 	}
-	s.reply(ctx, conn, req, result)
+	s.reply(ctx, conn, cli, req, result)
 }
 
 // lookup 查找 method 处理器：精确优先，否则按一级前缀。
@@ -198,52 +355,68 @@ func (s *Server) handleConnect(ctx context.Context, conn *websocket.Conn, cli *C
 		_ = json.Unmarshal(req.Params, &params)
 	}
 	if params.Protocol != "" && params.Protocol != "1.0" {
-		s.replyError(ctx, conn, req, codeAuthFailed, "unsupported protocol", nil)
+		s.replyError(ctx, conn, cli, req, codeAuthFailed, "unsupported protocol", nil)
 		return
 	}
 	if s.CredentialCheck != nil && !s.CredentialCheck(params.Auth) {
-		s.replyError(ctx, conn, req, codeAuthFailed, "invalid credential", nil)
+		s.replyError(ctx, conn, cli, req, codeAuthFailed, "invalid credential", nil)
 		return
 	}
 	cli.Handshake = true
 	cli.ID = params.Client
 	cli.Name = params.Client
-	s.reply(ctx, conn, req, map[string]any{"ok": true, "protocol": "1.0"})
+	s.reply(ctx, conn, cli, req, map[string]any{"ok": true, "protocol": "1.0"})
 }
 
 // handleDisconnect 断开。
 func (s *Server) handleDisconnect(ctx context.Context, conn *websocket.Conn, cli *Client, req request) {
 	cli.Handshake = false
-	s.reply(ctx, conn, req, map[string]any{"ok": true})
+	s.reply(ctx, conn, cli, req, map[string]any{"ok": true})
 	_ = conn.Close(websocket.StatusNormalClosure, "bye")
 }
 
 // reply 回成功响应。
-func (s *Server) reply(ctx context.Context, conn *websocket.Conn, req request, result any) {
-	resp := response{JSONRPC: "2.0", ID: req.ID, Result: result}
-	_ = wsjson.Write(ctx, conn, resp)
+func (s *Server) reply(ctx context.Context, _ *websocket.Conn, cli *Client, req request, result any) {
+	if isNotification(req) {
+		return
+	}
+	resp := response{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage("null")}
+	if result != nil {
+		data, err := json.Marshal(result)
+		if err != nil {
+			s.replyError(ctx, nil, cli, req, -32603, "响应序列化失败", nil)
+			return
+		}
+		resp.Result = data
+	}
+	_ = cli.writeJSON(ctx, resp)
 }
 
 // replyError 回错误响应。
-func (s *Server) replyError(ctx context.Context, conn *websocket.Conn, req request, code int, msg string, data any) {
+func (s *Server) replyError(ctx context.Context, _ *websocket.Conn, cli *Client, req request, code int, msg string, data any) {
+	if isNotification(req) {
+		return
+	}
 	resp := response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Error:   &rpcError{Code: code, Message: msg, Data: data},
 	}
-	_ = wsjson.Write(ctx, conn, resp)
+	_ = cli.writeJSON(ctx, resp)
 }
 
 // Broadcast 向所有已握手客户端推送（event.push 通知，QC8）。
 func (s *Server) Broadcast(ctx context.Context, typ string, payload any) {
 	s.mu.RLock()
-	conns := make([]*websocket.Conn, 0, len(s.clients))
-	for conn := range s.clients {
-		conns = append(conns, conn)
+	clients := make([]*Client, 0, len(s.clients))
+	for _, cli := range s.clients {
+		if cli.Handshake {
+			clients = append(clients, cli)
+		}
 	}
 	s.mu.RUnlock()
-	for _, conn := range conns {
-		_ = wsjson.Write(ctx, conn, map[string]any{
+	for _, cli := range clients {
+		_ = cli.writeJSON(ctx, map[string]any{
 			"jsonrpc": "2.0", "method": "event.push",
 			"params": map[string]any{"type": typ, "payload": payload},
 		})

@@ -1,4 +1,4 @@
-# 敏感信息——绝不上传
+# 敏感信息和本地配置
 api
 *.key
 *.pem
@@ -6,16 +6,21 @@ api
 .env.*
 secrets.*
 *config*.local*
+minibox.yaml
 
 # 运行时产物
 *.db
 *.db-wal
 *.db-shm
 *.sqlite
+*.lock
+*.pid
+*.log
 runtime/
 data/
 
-# 测试临时文件夹
+# 构建和测试生成物
+/bin/
+/build/
 test-tmp/
 /tmp/
-bin/

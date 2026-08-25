@@ -43,7 +43,7 @@ func (a *App) handleDeviceConnect(ctx context.Context, c *wstransport.Client, pa
 		return nil, nil
 	}
 
-	dev, err := a.hub.HandleConnect(ctx, nil, req.DeviceID, "", "", nil, nil)
+	dev, err := a.hub.HandleConnect(ctx, c, req.DeviceID, "", "", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func (a *App) handleDeviceHello(ctx context.Context, c *wstransport.Client, para
 		return nil, nil
 	}
 
-	dev, err := a.hub.HandleConnect(ctx, nil, info.ID, info.Model, info.Android, info.Capabilities, nil)
+	dev, err := a.hub.HandleConnect(ctx, c, info.ID, info.Model, info.Android, info.Capabilities, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +114,20 @@ func (a *App) handleDeviceStatus(w http.ResponseWriter, r *http.Request) {
 	a.respondOK(w, r, "api.device.status", dev)
 }
 
+// handleDeviceCommands 返回指定设备的审计命令。
 func (a *App) handleDeviceCommands(w http.ResponseWriter, r *http.Request) {
-	logs := a.hub.AuditLog()
+	id := chi.URLParam(r, "id")
+	if a.hub.GetDevice(id) == nil {
+		a.respondErr(w, r, http.StatusNotFound, "not_found", "设备不存在: "+id)
+		return
+	}
+	all := a.hub.AuditLog()
+	logs := make([]*device.Command, 0, len(all))
+	for _, cmd := range all {
+		if cmd.DeviceID == id {
+			logs = append(logs, cmd)
+		}
+	}
 	a.respondOK(w, r, "api.device.commands", map[string]any{"commands": logs})
 }
 

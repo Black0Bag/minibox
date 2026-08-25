@@ -1,142 +1,173 @@
 package llm
 
-// embedding 客户端（模块 19：OpenAI 兼容 /v1/embeddings 端点）。
-// 设计：通用 OpenAI 兼容 embedding 端点，阶段 2.1 接入编译管道。
-// 支持任意 OpenAI 兼容端点（NVIDIA/OpenAI/ollama 等），不引第三方 SDK。
-
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
-// EmbeddingClient 通用 OpenAI 兼容 embedding 客户端。
+// EmbeddingClient is a small OpenAI-compatible embeddings client.
 type EmbeddingClient struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
-	dimensions int // 输出维度（0 表示不限制，模型默认）
+	dimensions int
+	maxRetries int
+	backoff    time.Duration
 }
 
-// NewEmbeddingClient 创建 embedding 客户端。
+// NewEmbeddingClient creates a client. baseURL may be either a service root or a /v1 root.
 func NewEmbeddingClient(baseURL, apiKey string, timeout time.Duration, dimensions int) *EmbeddingClient {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &EmbeddingClient{
-		baseURL:    baseURL,
-		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: timeout},
-		dimensions: dimensions,
-	}
+	return &EmbeddingClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: &http.Client{Timeout: timeout}, dimensions: dimensions, maxRetries: 2, backoff: 100 * time.Millisecond}
 }
 
-// embeddingReq OpenAI embeddings 请求体。
 type embeddingReq struct {
-	Model          string `json:"model"`
-	Input          any    `json:"input"` // string | []string
-	EncodingFormat string `json:"encoding_format,omitempty"`
-	InputType      string `json:"input_type,omitempty"` // NVIDIA asymmetric 模型：passage=索引 / query=查询
-	Dimensions     int    `json:"dimensions,omitempty"` // 输出维度（支持动态维度的模型可降维）
+	Model     string `json:"model"`
+	Input     any    `json:"input"`
+	InputType string `json:"input_type,omitempty"`
+	// Dimensions is only sent when the configured model/service is known to support it.
+	Dimensions *int `json:"dimensions,omitempty"`
 }
-
-// embeddingResp OpenAI embeddings 响应体。
 type embeddingResp struct {
-	Object string `json:"object"`
-	Data   []struct {
+	Data []struct {
 		Object    string    `json:"object"`
 		Embedding []float32 `json:"embedding"`
 		Index     int       `json:"index"`
 	} `json:"data"`
-	Model string `json:"model"`
-	Usage struct {
-		PromptTokens int `json:"prompt_tokens"`
-		TotalTokens  int `json:"total_tokens"`
-	} `json:"usage"`
 }
 
-// EmbeddingType 向量用途（asymmetric 模型区分 passage/query）。
 type EmbeddingType string
 
 const (
-	// EmbedTypePassage 索引文档向量（NVIDIA asymmetric 模型）。
 	EmbedTypePassage EmbeddingType = "passage"
-	// EmbedTypeQuery 查询向量（NVIDIA asymmetric 模型）。
-	EmbedTypeQuery EmbeddingType = "query"
+	EmbedTypeQuery   EmbeddingType = "query"
 )
 
-// Embed 生成向量（单文本，passage 模式，索引用）。
 func (c *EmbeddingClient) Embed(ctx context.Context, model, text string) ([]float32, error) {
 	vecs, err := c.EmbedTyped(ctx, model, []string{text}, EmbedTypePassage)
 	if err != nil {
 		return nil, err
 	}
-	if len(vecs) == 0 {
-		return nil, fmt.Errorf("embedding 返回空")
+	if len(vecs) != 1 {
+		return nil, fmt.Errorf("embedding 返回数量异常: got=%d want=1", len(vecs))
 	}
 	return vecs[0], nil
 }
-
-// EmbedBatch 批量生成向量（passage 模式，索引用）。
 func (c *EmbeddingClient) EmbedBatch(ctx context.Context, model string, texts []string) ([][]float32, error) {
 	return c.EmbedTyped(ctx, model, texts, EmbedTypePassage)
 }
-
-// EmbedQuery 生成查询向量（query 模式，检索用）。
 func (c *EmbeddingClient) EmbedQuery(ctx context.Context, model, text string) ([]float32, error) {
 	vecs, err := c.EmbedTyped(ctx, model, []string{text}, EmbedTypeQuery)
 	if err != nil {
 		return nil, err
 	}
-	if len(vecs) == 0 {
-		return nil, fmt.Errorf("embedding 返回空")
+	if len(vecs) != 1 {
+		return nil, fmt.Errorf("embedding 返回数量异常: got=%d want=1", len(vecs))
 	}
 	return vecs[0], nil
 }
 
-// EmbedTyped 按指定类型批量生成向量。
-// NVIDIA asymmetric 模型（llama-nemotron-embed 等）要求：索引用 passage，查询用 query。
+func embeddingEndpoint(baseURL string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(baseURL, "/embeddings") {
+		return baseURL
+	}
+	if strings.HasSuffix(baseURL, "/v1") {
+		return baseURL + "/embeddings"
+	}
+	return baseURL + "/v1/embeddings"
+}
+
+// requestDimensions returns a dimension override only for models known to use
+// Matryoshka-style dynamic dimensions. Generic models such as BGE-M3 use their
+// native output size unless the caller later adds an explicit capability policy.
+func (c *EmbeddingClient) requestDimensions(model string) *int {
+	if c.dimensions <= 0 || strings.Contains(strings.ToLower(model), "bge-m3") {
+		return nil
+	}
+	dim := c.dimensions
+	return &dim
+}
+
+// EmbedTyped generates embeddings for a batch using the requested query/passage mode.
 func (c *EmbeddingClient) EmbedTyped(ctx context.Context, model string, texts []string, inputType EmbeddingType) ([][]float32, error) {
+	if strings.TrimSpace(model) == "" {
+		return nil, fmt.Errorf("embedding model 不能为空")
+	}
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("embedding input 不能为空")
+	}
 	body, err := json.Marshal(embeddingReq{
 		Model:      model,
 		Input:      texts,
 		InputType:  string(inputType),
-		Dimensions: c.dimensions,
+		Dimensions: c.requestDimensions(model),
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("编码 embedding 请求失败: %w", err)
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/embeddings", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
+	endpoint := embeddingEndpoint(c.baseURL)
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if reqErr != nil {
+			return nil, fmt.Errorf("创建 embedding 请求失败: %w", reqErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
+		resp, doErr := c.httpClient.Do(req)
+		if doErr != nil {
+			lastErr = fmt.Errorf("embedding 请求失败: %w", doErr)
+		} else {
+			responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			resp.Body.Close()
+			if readErr != nil {
+				lastErr = fmt.Errorf("读取 embedding 响应失败: %w", readErr)
+			} else if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				lastErr = fmt.Errorf("embedding API: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+				if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+					return nil, lastErr
+				}
+			} else {
+				var result embeddingResp
+				if err := json.Unmarshal(responseBody, &result); err != nil {
+					return nil, fmt.Errorf("解析 embedding 响应失败: %w", err)
+				}
+				if len(result.Data) != len(texts) {
+					return nil, fmt.Errorf("embedding 返回数量异常: got=%d want=%d", len(result.Data), len(texts))
+				}
+				vecs := make([][]float32, len(texts))
+				for _, item := range result.Data {
+					if item.Index < 0 || item.Index >= len(texts) {
+						return nil, fmt.Errorf("embedding index 越界: %d", item.Index)
+					}
+					if len(item.Embedding) == 0 || (c.dimensions > 0 && len(item.Embedding) != c.dimensions) {
+						return nil, fmt.Errorf("embedding 维度异常: got=%d want=%d", len(item.Embedding), c.dimensions)
+					}
+					vecs[item.Index] = item.Embedding
+				}
+				return vecs, nil
+			}
+		}
+		if attempt < c.maxRetries {
+			timer := time.NewTimer(c.backoff * time.Duration(1<<attempt))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("embedding 请求失败: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		var bodyBytes [512]byte
-		n, _ := resp.Body.Read(bodyBytes[:])
-		return nil, fmt.Errorf("embedding API: status=%d body=%s", resp.StatusCode, string(bodyBytes[:n]))
-	}
-
-	var result embeddingResp
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("解析 embedding 响应失败: %w", err)
-	}
-
-	vecs := make([][]float32, len(result.Data))
-	for _, d := range result.Data {
-		vecs[d.Index] = d.Embedding
-	}
-	return vecs, nil
+	return nil, lastErr
 }

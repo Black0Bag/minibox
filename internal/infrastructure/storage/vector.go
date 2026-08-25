@@ -103,7 +103,7 @@ func (s *SQLiteStore) searchVec(ctx context.Context, tier memory.Tier, q memory.
 
 // rrfFuse 用 RRF（Reciprocal Rank Fusion）融合 FTS5 和向量两路结果。
 // RRF 公式：score = Σ 1/(k + rank)，k=60（业界标准，vstash/mika 实证）。
-// 去重：同一 doc 两路都有则合并分数；保留更高 match_type 标记。
+// 去重：同一 doc 两路都有则合并分数；单路结果保留原 match_type。
 func rrfFuse(vecHits, ftsHits []memory.Hit, topK int) []memory.Hit {
 	const rrfK = 60
 	score := make(map[int64]float64)
@@ -129,20 +129,31 @@ func rrfFuse(vecHits, ftsHits []memory.Hit, topK int) []memory.Hit {
 
 	// 合并条目内容（优先取向量路，保精度）
 	byID := make(map[int64]memory.Hit, len(order))
+	fromVec := make(map[int64]bool, len(vecHits))
+	fromFTS := make(map[int64]bool, len(ftsHits))
 	for _, h := range vecHits {
 		byID[h.ID] = h
+		fromVec[h.ID] = true
 	}
 	for _, h := range ftsHits {
 		if _, ok := byID[h.ID]; !ok {
 			byID[h.ID] = h
 		}
+		fromFTS[h.ID] = true
 	}
 
 	out := make([]memory.Hit, 0, len(order))
 	for _, id := range order {
 		h := byID[id]
 		h.Score = score[id]
-		h.MatchType = "both"
+		switch {
+		case fromVec[id] && fromFTS[id]:
+			h.MatchType = "both"
+		case fromVec[id]:
+			h.MatchType = "vec"
+		default:
+			h.MatchType = "fts"
+		}
 		out = append(out, h)
 	}
 	// 截断 topK

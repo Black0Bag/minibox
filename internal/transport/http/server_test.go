@@ -14,7 +14,7 @@ import (
 func newTestServer() *Server {
 	cfg := config.Default().Server
 	logger := slog.New(slog.DiscardHandler)
-	return New(cfg, logger, nil)
+	return New(cfg, logger, nil, "")
 }
 
 // TestUnknownRoute 未定义路由返回 404。

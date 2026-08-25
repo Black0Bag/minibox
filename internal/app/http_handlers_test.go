@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,8 +14,11 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/domain/agent"
+	"github.com/Black0Bag/minibox/internal/domain/llm"
 	"github.com/Black0Bag/minibox/internal/domain/permission"
 	"github.com/Black0Bag/minibox/internal/domain/tools"
+	"github.com/Black0Bag/minibox/internal/infrastructure/engine"
 	"github.com/Black0Bag/minibox/internal/platform/degradation"
 )
 
@@ -98,7 +103,7 @@ func TestHandleToolList(t *testing.T) {
 
 	var resp struct {
 		Data struct {
-			Count int `json:"count"`
+			Count int   `json:"count"`
 			Tools []any `json:"tools"`
 		} `json:"data"`
 	}
@@ -211,14 +216,43 @@ func TestHandleConfigUpdate_EmptyBody(t *testing.T) {
 	}
 }
 
-// mockTool 实现 tools.Tool 接口用于测试
+// TestSessionSendReturnsRunIDWhenAgentFails 异步模式下 Send 返回 run_id，错误通过 SSE 通知。
+func TestSessionSendReturnsRunIDWhenAgentFails(t *testing.T) {
+	provider := &failingProvider{}
+	eng := engine.NewEngine(provider, nil, agent.Config{MaxSteps: 1}, slog.New(slog.DiscardHandler))
+	hub := newSessionHub(eng, nil)
+	session := hub.Create()
+
+	runID, err := hub.Send(context.Background(), session.ID, "触发失败")
+	if err != nil {
+		t.Fatalf("异步 Send 不应返回 error（错误走 SSE），实际: %v", err)
+	}
+	if runID == "" {
+		t.Fatal("应返回非空 run_id")
+	}
+}
+
+type failingProvider struct{}
+
+func (failingProvider) Name() string { return "failing" }
+
+func (failingProvider) Complete(context.Context, llm.Request) (*llm.Response, error) {
+	return nil, fmt.Errorf("模拟 LLM 失败")
+}
+
+func (failingProvider) Stream(context.Context, llm.Request) (<-chan llm.StreamEvent, error) {
+	return nil, fmt.Errorf("模拟 LLM 失败")
+}
+
+func (failingProvider) Models(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
 type mockTool struct {
 	name string
 	desc string
 }
 
-func (m *mockTool) Name() string                                      { return m.name }
-func (m *mockTool) Description() string                               { return m.desc }
-func (m *mockTool) JSONSchema() json.RawMessage                       { return json.RawMessage(`{"type":"object"}`) }
-func (m *mockTool) Metadata() tools.Metadata                          { return tools.Metadata{ReadOnly: true} }
+func (m *mockTool) Name() string                                                { return m.name }
+func (m *mockTool) Description() string                                         { return m.desc }
+func (m *mockTool) JSONSchema() json.RawMessage                                 { return json.RawMessage(`{"type":"object"}`) }
+func (m *mockTool) Metadata() tools.Metadata                                    { return tools.Metadata{ReadOnly: true} }
 func (m *mockTool) Invoke(_ context.Context, _ json.RawMessage) (string, error) { return "ok", nil }

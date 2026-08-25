@@ -185,3 +185,44 @@ func parseTime(s string) time.Time {
 	}
 	return t
 }
+
+// SessionMessage 会话消息的轻量表示（从 conversation_log 恢复用）。
+type SessionMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	RunID   string `json:"run_id,omitempty"`
+	At      string `json:"at"`
+}
+
+// LoadRecentSessions 从 conversation_log 中恢复最近 N 条会话的消息。
+// 返回 map[session_id][]SessionMessage，按时间正序。
+func (s *RunStore) LoadRecentSessions(limit int) (map[string][]SessionMessage, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`SELECT session_id, run_id, role, content, created_at
+		FROM conversation_log
+		WHERE session_id IN (
+			SELECT DISTINCT session_id FROM conversation_log ORDER BY created_at DESC LIMIT ?
+		)
+		ORDER BY created_at ASC`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("加载最近会话失败: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]SessionMessage)
+	for rows.Next() {
+		var sessionID, runID, role, content, createdAt string
+		if err := rows.Scan(&sessionID, &runID, &role, &content, &createdAt); err != nil {
+			return nil, fmt.Errorf("扫描会话消息失败: %w", err)
+		}
+		result[sessionID] = append(result[sessionID], SessionMessage{
+			Role:    role,
+			Content: content,
+			RunID:   runID,
+			At:      createdAt,
+		})
+	}
+	return result, rows.Err()
+}

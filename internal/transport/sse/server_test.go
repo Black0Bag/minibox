@@ -65,7 +65,54 @@ func TestSeq_续传(t *testing.T) {
 	}
 }
 
-// TestHandler_SSE响应 验证 SSE 响应头。
+func TestReplayHistoryAfterReconnect(t *testing.T) {
+	srv := New(slog.New(slog.DiscardHandler))
+	first := srv.subscribe("reconnect", 1)
+	for i := 0; i < 3; i++ {
+		if err := srv.Publish("reconnect", "agent", "agent.history", map[string]int{"n": i}); err != nil {
+			t.Fatal(err)
+		}
+		<-first.ch
+	}
+	srv.unsubscribe("reconnect", first)
+
+	// Publish while disconnected. The event must be retained for Last-Event-ID replay.
+	if err := srv.Publish("reconnect", "agent", "agent.history", map[string]int{"n": 3}); err != nil {
+		t.Fatal(err)
+	}
+	second := srv.subscribe("reconnect", 3)
+	replayed := srv.replay("reconnect", 2)
+	if len(replayed) != 2 || replayed[0].Seq != 3 || replayed[1].Seq != 4 {
+		t.Fatalf("回放序列异常: %+v", replayed)
+	}
+	if err := srv.Publish("reconnect", "agent", "agent.history", map[string]int{"n": 4}); err != nil {
+		t.Fatal(err)
+	}
+	got := <-second.ch
+	if got.Seq != 5 {
+		t.Fatalf("重连后的新事件 seq=%d, want 5", got.Seq)
+	}
+	srv.unsubscribe("reconnect", second)
+}
+
+func TestSubscribeReplacementDoesNotDoubleClose(t *testing.T) {
+	srv := New(slog.New(slog.DiscardHandler))
+	first := srv.subscribe("single-client", 1)
+	second := srv.subscribe("single-client", 1)
+
+	select {
+	case <-first.done:
+	case <-time.After(time.Second):
+		t.Fatal("新订阅应关闭旧订阅")
+	}
+
+	// 旧 Handler 的 defer 可安全调用 unsubscribe，不能误删/关闭当前订阅。
+	srv.unsubscribe("single-client", first)
+	if srv.streams["single-client"] != second {
+		t.Fatal("旧订阅清理不应删除当前订阅")
+	}
+	srv.unsubscribe("single-client", second)
+}
 func TestHandler_SSE响应(t *testing.T) {
 	srv := New(slog.New(slog.DiscardHandler))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stream?session_id=t1", nil)

@@ -2,6 +2,7 @@ package teamwork
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -219,6 +220,15 @@ func TestCircuitBreakerDemotion(t *testing.T) {
 	}
 }
 
+func TestStaffingRequestUsesSnakeCaseJSON(t *testing.T) {
+	var req StaffingRequest
+	if err := json.Unmarshal([]byte(`{"task_id":"task-1","reason":"需要测试","role_card_id":"tester","permanent":false}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.TaskID != "task-1" || req.Reason != "需要测试" || req.RoleCardID != "tester" {
+		t.Fatalf("JSON 字段映射异常: %+v", req)
+	}
+}
 func TestSchedulerTriage(t *testing.T) {
 	s := NewScheduler(nil, nil)
 	// 明确需求：编程。
@@ -241,6 +251,17 @@ func TestSchedulerTriageEmpty(t *testing.T) {
 	s := NewScheduler(nil, nil)
 	if _, err := s.TriageTask(context.Background(), ""); err == nil {
 		t.Fatal("空需求应报错")
+	}
+}
+
+func TestSchedulerTriageRESTKeywordCoverage(t *testing.T) {
+	s := NewScheduler(nil, nil)
+	triage, err := s.TriageTask(context.Background(), "帮我写一个 Go REST API 并测试")
+	if err != nil {
+		t.Fatalf("编程需求分诊失败: %v", err)
+	}
+	if len(triage.Recommended) == 0 || triage.Recommended[0].Team.ID != "engineering" {
+		t.Fatalf("编程需求应推荐 engineering，实际: %+v", triage.Recommended)
 	}
 }
 

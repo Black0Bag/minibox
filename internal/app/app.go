@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/Black0Bag/minibox/internal/config"
+	"github.com/Black0Bag/minibox/internal/device"
+	"github.com/Black0Bag/minibox/internal/device/guardrails"
 	"github.com/Black0Bag/minibox/internal/domain/agent"
+	"github.com/Black0Bag/minibox/internal/domain/charactercard"
 	"github.com/Black0Bag/minibox/internal/domain/llm"
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 	"github.com/Black0Bag/minibox/internal/domain/permission"
-	"github.com/Black0Bag/minibox/internal/domain/charactercard"
 	"github.com/Black0Bag/minibox/internal/domain/scheduler"
 	"github.com/Black0Bag/minibox/internal/domain/setup"
 	"github.com/Black0Bag/minibox/internal/domain/subagent"
@@ -30,8 +32,8 @@ import (
 	infrallm "github.com/Black0Bag/minibox/internal/infrastructure/llm"
 	infrasched "github.com/Black0Bag/minibox/internal/infrastructure/scheduler"
 	"github.com/Black0Bag/minibox/internal/infrastructure/storage"
-	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
 	infrateamwork "github.com/Black0Bag/minibox/internal/infrastructure/teamwork"
+	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
 	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
 	"github.com/Black0Bag/minibox/internal/monitor"
 	"github.com/Black0Bag/minibox/internal/platform/degradation"
@@ -39,8 +41,6 @@ import (
 	"github.com/Black0Bag/minibox/internal/platform/fsutil"
 	"github.com/Black0Bag/minibox/internal/platform/instance"
 	"github.com/Black0Bag/minibox/internal/platform/timestamp"
-	"github.com/Black0Bag/minibox/internal/device"
-	"github.com/Black0Bag/minibox/internal/device/guardrails"
 	httptransport "github.com/Black0Bag/minibox/internal/transport/http"
 	ssetransport "github.com/Black0Bag/minibox/internal/transport/sse"
 	wstransport "github.com/Black0Bag/minibox/internal/transport/ws"
@@ -48,13 +48,13 @@ import (
 
 // App 是应用根对象，持有所有装配好的依赖。
 type App struct {
-	cfg    config.Config
-	logger *slog.Logger
+	cfg       config.Config
+	logger    *slog.Logger
 	startTime time.Time // 启动时间（健康检查 uptime）
-	db     *sql.DB
-	http   *httptransport.Server
-	sse    *ssetransport.Server
-	ws     *wstransport.Server
+	db        *sql.DB
+	http      *httptransport.Server
+	sse       *ssetransport.Server
+	ws        *wstransport.Server
 
 	// 域依赖（阶段 1.1 端到端装配）
 	llm       llm.Provider   // Router（多供应商）
@@ -72,17 +72,17 @@ type App struct {
 	guard    *setup.PathGuard
 	wbLoader *worldbook.Loader
 	cron     *infrasched.CronScheduler
-	logme    *fsutil.Logme        // 足迹系统（B21）
-	acq      *infratools.Acquirer  // B8 工具自动获取器
-	orch     *engine.Orchestrator // subagent 调度器（B7）
-	monitor  *degradation.Monitor // 资源降级监控（B16）
-	backup   *backup.Manager      // 备份管理（B18）
-	upgrade  *upgrade.Manager     // 自升级（B19）
-	hub      *device.Hub          // 设备代理网关（D-01）
-	ts       *timestamp.Service   // 全局时间戳服务（B22）
-	instLock  *instance.Lock      // 单实例锁（N-12）
-	bus       *eventbus.EventBus[SystemEvent] // 进程内事件总线
-	tw        *infrateamwork.Coordinator // 团队协作编排（T 系列）
+	logme    *fsutil.Logme                   // 足迹系统（B21）
+	acq      *infratools.Acquirer            // B8 工具自动获取器
+	orch     *engine.Orchestrator            // subagent 调度器（B7）
+	monitor  *degradation.Monitor            // 资源降级监控（B16）
+	backup   *backup.Manager                 // 备份管理（B18）
+	upgrade  *upgrade.Manager                // 自升级（B19）
+	hub      *device.Hub                     // 设备代理网关（D-01）
+	ts       *timestamp.Service              // 全局时间戳服务（B22）
+	instLock *instance.Lock                  // 单实例锁（N-12）
+	bus      *eventbus.EventBus[SystemEvent] // 进程内事件总线
+	tw       *infrateamwork.Coordinator      // 团队协作编排（T 系列）
 
 	// 会话（对话端点用）
 	sessions *sessionHub
@@ -131,6 +131,9 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	if d, ok := a.distiller.(*storage.SQLiteDistiller); ok {
 		d.SetPrefExtractor(newPrefExtractor(router))
 	}
+	if a.compiler != nil {
+		a.compiler.SetKnowledgeExtractor(newKnowledgeExtractor(router))
+	}
 
 	// 3. 工具注册表 + 内置工具 + 权限链 + 执行器
 	if err := a.buildTools(cfg); err != nil {
@@ -142,11 +145,17 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	a.buildAgent()
 
 	// 5. 传输层（三通道）
-	a.http = httptransport.New(cfg.Server, logger, a.toolReg())
+	// 加载或生成 Bearer Token（认证用）
+	authToken, err := loadOrGenerateToken(cfg.Auth.TokenFile)
+	if err != nil {
+		_ = a.db.Close()
+		return nil, fmt.Errorf("加载/生成认证 Token 失败: %w", err)
+	}
+	a.http = httptransport.New(cfg.Server, logger, a.toolReg(), authToken)
 	a.sse = ssetransport.New(logger)
 	a.ws = wstransport.New(logger)
-	a.ws.RegisterDefaultHandlers() // 注册全部 WS method 处理器（device.*/browser.*/peer.*/event.*/system.*）
-	a.mountREST(a.http.Router()) // 阶段 1.2：挂全量 REST 业务端点
+	a.ws.RegisterDefaultHandlers()     // 注册全部 WS method 处理器（device.*/browser.*/peer.*/event.*/system.*）
+	a.mountREST(a.http.Router())       // 阶段 1.2：挂全量 REST 业务端点
 	a.mountDeviceREST(a.http.Router()) // 设备代理 REST 端点（D-11）
 
 	// 阶段 1.3：三通道独立路由组（SSE 事件流 / WS 设备通道）
@@ -171,6 +180,13 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	a.sessions.SetPublisher(func(sessionID, typ string, data any) {
 		_ = a.sse.Publish(sessionID, "agent", typ, data)
 	})
+
+	// 7.5 会话持久化（P1-1）：注入 RunStore + 启动时恢复最近会话
+	if a.db != nil {
+		runStore := storage.NewRunStore(a.db)
+		a.sessions.SetRunStore(runStore)
+		a.sessions.RestoreSessions(logger)
+	}
 
 	// 8. 全局时间戳服务（B22：NTP 校准 + 单调序号）
 	a.ts = timestamp.New(a.logger)
@@ -206,6 +222,10 @@ func (a *App) openDatabase(cfg config.Config) error {
 	}
 
 	store := storage.NewSQLiteStore(db, tok, cfg.Embedding.Dimensions)
+	if err := store.RebuildFTS(context.Background()); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("重建知识库全文索引失败: %w", err)
+	}
 	a.memory = store
 
 	// 编译管道 + 蒸馏 + 组装器（阶段 2.1 接 embedding）
@@ -431,14 +451,19 @@ func (a *App) buildSetup(cfg config.Config) error {
 
 	// 设备代理网关（D-01）
 	a.hub = device.NewHub(a.logger)
+	for _, t := range device.NewCommandTools(a.hub) {
+		if err := a.toolkit.reg.Register(t); err != nil {
+			return fmt.Errorf("注册设备工具 %s 失败: %w", t.Name(), err)
+		}
+	}
+	a.ws.Handle("device", func(ctx context.Context, c *wstransport.Client, params json.RawMessage) (any, error) {
+		return a.handleDeviceMessage(ctx, c, params)
+	})
 	a.hub.Guard().SetHITL(func(_ context.Context, action guardrails.Action) (bool, error) {
 		// HITL 确认：发布审批请求到 SSE 事件流，等待前端确认。
 		// 当前无前端接入，fail-closed 拒绝（D-13 危险操作逐次确认）。
 		a.logger.Warn("设备危险操作待确认", "device", action.DeviceID, "method", action.Method)
 		return false, nil
-	})
-	a.ws.Handle("device", func(ctx context.Context, c *wstransport.Client, params json.RawMessage) (any, error) {
-		return a.handleDeviceMessage(ctx, c, params)
 	})
 
 	return nil

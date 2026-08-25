@@ -71,7 +71,79 @@ func TestComplete(t *testing.T) {
 	}
 }
 
-// TestClassifyError 验证错误分类。
+func TestCompleteUnexpectedSSE(t *testing.T) {
+	var sawExplicitFalse bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("解析请求失败: %v", err)
+		}
+		sawExplicitFalse = !request.Stream
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"model\":\"sse-model\",\"choices\":[{\"delta\":{\"content\":\"你\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"sse-model\",\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"sse-model\",\"choices\":[{\"delta\":{\"content\":\"好\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompat("test", srv.URL, []string{"test-key"}, time.Second)
+	resp, err := c.Complete(context.Background(), domainllm.Request{
+		Model:    "sse-model",
+		Messages: []domainllm.Message{{Role: domainllm.RoleUser, Content: "你好"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete SSE 回退失败: %v", err)
+	}
+	if !sawExplicitFalse {
+		t.Fatal("非流式请求必须显式发送 stream=false")
+	}
+	if resp.Content != "你好" || resp.Reasoning != "思考" || resp.FinishReason != "stop" {
+		t.Fatalf("SSE 聚合异常: %+v", resp)
+	}
+	if resp.Usage.TotalTokens != 5 || resp.Model != "sse-model" {
+		t.Fatalf("SSE usage/model 异常: %+v", resp)
+	}
+}
+
+func TestCompleteUnexpectedSSEToolCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"function\":{\"name\":\"search_knowledge\",\"arguments\":\"{\\\"query\\\":\"}}]},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"minibox\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompat("test", srv.URL, []string{"test-key"}, time.Second)
+	resp, err := c.Complete(context.Background(), domainllm.Request{Model: "sse-model"})
+	if err != nil {
+		t.Fatalf("Complete SSE 工具调用回退失败: %v", err)
+	}
+	if resp.FinishReason != "tool_calls" || len(resp.ToolCalls) != 1 {
+		t.Fatalf("工具调用数量或结束原因异常: %+v", resp)
+	}
+	if got := resp.ToolCalls[0]; got.ID != "call_1" || got.Name != "search_knowledge" || got.Arguments != `{"query":"minibox"}` {
+		t.Fatalf("工具调用聚合异常: %+v", got)
+	}
+}
+
+func TestCompleteUnexpectedSSERejectsTruncatedStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompat("test", srv.URL, []string{"test-key"}, time.Second)
+	_, err := c.Complete(context.Background(), domainllm.Request{Model: "sse-model"})
+	if err == nil || !strings.Contains(err.Error(), "缺少 [DONE]") {
+		t.Fatalf("截断 SSE 应返回明确错误，实际: %v", err)
+	}
+}
+
 func TestClassifyError(t *testing.T) {
 	cases := []struct {
 		code int

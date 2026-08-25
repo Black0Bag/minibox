@@ -8,30 +8,27 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/Black0Bag/minibox/internal/device/guardrails"
+	"github.com/Black0Bag/minibox/internal/transport"
 )
 
 // Hub 设备网关（D-01：注册/心跳/多设备/命令下发/事件订阅/安全校验）。
 type Hub struct {
 	mu       sync.RWMutex
-	devices  map[string]*Device // deviceID → Device
-	conns    map[string]*websocket.Conn // deviceID → WS 连接
+	devices  map[string]*Device
+	conns    map[string]transport.RPCClient // deviceID → JSON-RPC 设备连接
 	audit    *AuditLogger
 	registry *Registry
 	manager  *PairingManager
 	guard    *guardrails.Guard
 	logger   *slog.Logger
-
 }
 
 // NewHub 创建设备网关。
 func NewHub(logger *slog.Logger) *Hub {
 	return &Hub{
 		devices:  make(map[string]*Device),
-		conns:    make(map[string]*websocket.Conn),
+		conns:    make(map[string]transport.RPCClient),
 		audit:    NewAuditLogger(),
 		registry: NewRegistry(),
 		manager:  NewPairingManager(),
@@ -40,8 +37,15 @@ func NewHub(logger *slog.Logger) *Hub {
 	}
 }
 
-// HandleConnect 设备连接握手（D-02/D-08）。
-func (h *Hub) HandleConnect(_ context.Context, conn *websocket.Conn, deviceID, model, android string, caps []string, perms map[string]bool) (*Device, error) {
+// HandleConnect 注册设备的受控 JSON-RPC 连接（D-02/D-08）。
+// Hub 只依赖接口，底层 WebSocket 的读循环仍由 transport 层独占。
+func (h *Hub) HandleConnect(_ context.Context, conn transport.RPCClient, deviceID, model, android string, caps []string, perms map[string]bool) (*Device, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("设备连接不能为空")
+	}
+	if deviceID == "" {
+		return nil, fmt.Errorf("设备 ID 不能为空")
+	}
 	dev := &Device{
 		ID:           deviceID,
 		Model:        model,
@@ -81,7 +85,6 @@ func (h *Hub) SendCommand(ctx context.Context, deviceID, method string, params j
 	conn, ok := h.conns[deviceID]
 	dev, devOK := h.devices[deviceID]
 	h.mu.RUnlock()
-
 	if !ok || !devOK || !dev.Online {
 		return nil, fmt.Errorf("设备离线: %s", deviceID)
 	}
@@ -114,34 +117,15 @@ func (h *Hub) SendCommand(ctx context.Context, deviceID, method string, params j
 		CreatedAt: time.Now(),
 	}
 
-	// 发送 JSON-RPC 请求
-	req := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      cmd.ID,
-		"method":  method,
-		"params":  params,
-	}
-	if err := wsjson.Write(ctx, conn, req); err != nil {
-		return nil, fmt.Errorf("命令发送失败: %w", err)
-	}
-
-	// 等待响应（超时 30s）
+	// transport 层持有唯一读循环，并按 cmd.ID 将响应分发回这里。
 	ctx2, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-
-	var resp struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      string          `json:"id"`
-		Result  json.RawMessage `json:"result,omitempty"`
-		Error   *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error,omitempty"`
-	}
-	if err := wsjson.Read(ctx2, conn, &resp); err != nil {
+	resp, err := conn.SendRequest(ctx2, cmd.ID, method, params)
+	if err != nil {
 		cmd.Status = "failed"
+		cmd.Result = &CommandResult{OK: false, Err: err.Error()}
 		h.audit.Log(cmd)
-		return nil, fmt.Errorf("命令响应超时: %w", err)
+		return nil, fmt.Errorf("命令响应失败: %w", err)
 	}
 
 	result := &CommandResult{OK: true}
@@ -179,9 +163,13 @@ func (h *Hub) GetDevice(id string) *Device {
 // RemoveDevice 移除设备（解绑）。
 func (h *Hub) RemoveDevice(id string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	conn := h.conns[id]
 	delete(h.devices, id)
 	delete(h.conns, id)
+	h.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 // StartHeartbeat 启动心跳检测（D-02：15s ping，3 次未响应判离线）。
@@ -228,21 +216,23 @@ func (h *Hub) Guard() *guardrails.Guard { return h.guard }
 // EmergencyStop 急停（D-13）：断开并冻结指定设备。
 func (h *Hub) EmergencyStop(deviceID string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	dev, ok := h.devices[deviceID]
+	conn := h.conns[deviceID]
 	if !ok {
+		h.mu.Unlock()
 		return fmt.Errorf("设备不存在: %s", deviceID)
 	}
-	if conn, ok := h.conns[deviceID]; ok {
-		_ = conn.Close(websocket.StatusNormalClosure, "紧急停止")
-		delete(h.conns, deviceID)
-	}
+	delete(h.conns, deviceID)
 	dev.Online = false
 	dev.Permissions = map[string]bool{
-		"accessibility":  false,
+		"accessibility":   false,
 		"mediaProjection": false,
-		"notification":   false,
+		"notification":    false,
+	}
+	h.mu.Unlock()
+
+	if conn != nil {
+		_ = conn.Close()
 	}
 	h.logger.Warn("设备紧急停止", "id", deviceID)
 	return nil

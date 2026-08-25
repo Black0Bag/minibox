@@ -202,7 +202,31 @@ func TestSearchNoVectorFallsBack(t *testing.T) {
 	}
 }
 
-// TestRRFFuse 融合去重与分数。
+func TestSearchDefaultsEmptyTierToStore(t *testing.T) {
+	store := newTestVecStore(t)
+	ctx := context.Background()
+	if err := store.Upsert(ctx, memory.Entry{Content: "默认层级检索测试", SourceHash: "default-tier"}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := store.Search(ctx, memory.SearchQuery{Text: "默认层级"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Tier != memory.TierStore {
+		t.Fatalf("空 Tier 应默认检索 store，实际: %+v", hits)
+	}
+}
+func TestRRFFusePreservesSingleRouteMatchType(t *testing.T) {
+	vecOnly := rrfFuse([]memory.Hit{{Entry: memory.Entry{ID: 1}}}, nil, 10)
+	if len(vecOnly) != 1 || vecOnly[0].MatchType != "vec" {
+		t.Fatalf("向量单路 match_type 异常: %+v", vecOnly)
+	}
+	ftsOnly := rrfFuse(nil, []memory.Hit{{Entry: memory.Entry{ID: 2}}}, 10)
+	if len(ftsOnly) != 1 || ftsOnly[0].MatchType != "fts" {
+		t.Fatalf("FTS 单路 match_type 异常: %+v", ftsOnly)
+	}
+}
+
 func TestRRFFuse(t *testing.T) {
 	vecHits := []memory.Hit{
 		{Entry: memory.Entry{ID: 1}, Score: 0.1},

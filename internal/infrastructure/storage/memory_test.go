@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -114,6 +115,123 @@ func TestStoreUpsertSearch(t *testing.T) {
 	}
 }
 
+func TestStoreFTSChineseCRUDAndRebuild(t *testing.T) {
+	store, _, _ := newTestStore(t)
+	ctx := context.Background()
+
+	entry := memory.Entry{
+		Content:    "上海人工智能实验室发布中文检索基准数据集",
+		Source:     "fts-test",
+		Tags:       []string{"中文", "检索"},
+		SourceHash: "fts-crud-1",
+		Importance: 0.9,
+	}
+	if err := store.Upsert(ctx, entry); err != nil {
+		t.Fatalf("写入中文条目失败: %v", err)
+	}
+
+	assertFTSMatch := func(query, wantContent string) {
+		t.Helper()
+		hits, err := store.Search(ctx, memory.SearchQuery{
+			Text: query, Tier: memory.TierStore, TopK: 5,
+		})
+		if err != nil {
+			t.Fatalf("检索 %q 失败: %v", query, err)
+		}
+		if len(hits) == 0 {
+			t.Fatalf("检索 %q 没有命中", query)
+		}
+		if hits[0].MatchType != "fts" {
+			t.Fatalf("检索 %q 应走 FTS，实际 match_type=%q", query, hits[0].MatchType)
+		}
+		if hits[0].Content != wantContent {
+			t.Fatalf("检索 %q 内容异常: %q", query, hits[0].Content)
+		}
+	}
+
+	assertFTSMatch("人工智能", entry.Content)
+	assertFTSMatch("中文检索", entry.Content)
+
+	id, err := store.GetIDByHash(ctx, entry.SourceHash)
+	if err != nil {
+		t.Fatalf("读取条目 ID 失败: %v", err)
+	}
+	updated := memory.Entry{
+		ID:         id,
+		Content:    "上海人工智能实验室发布新的向量检索评测数据集",
+		Source:     "fts-test-updated",
+		Tags:       []string{"中文", "向量"},
+		SourceHash: entry.SourceHash,
+		Importance: 0.95,
+	}
+	if err := store.Upsert(ctx, updated); err != nil {
+		t.Fatalf("更新中文条目失败: %v", err)
+	}
+	assertFTSMatch("向量检索", updated.Content)
+
+	if err := store.RebuildFTS(ctx); err != nil {
+		t.Fatalf("FTS 回填重建失败: %v", err)
+	}
+	assertFTSMatch("评测数据集", updated.Content)
+
+	if err := store.Delete(ctx, id, memory.TierStore); err != nil {
+		t.Fatalf("删除中文条目失败: %v", err)
+	}
+	hits, err := store.Search(ctx, memory.SearchQuery{
+		Text: "向量检索", Tier: memory.TierStore, TopK: 5,
+	})
+	if err != nil {
+		t.Fatalf("删除后检索失败: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("删除后不应残留 FTS 命中，实际: %+v", hits)
+	}
+}
+
+func TestStoreFTSRebuildBackfillsLegacyEnglishAndSpecialQueries(t *testing.T) {
+	store, _, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// 模拟 0006 迁移前或绕过 Store 的旧数据：tokenized_content 初始为空。
+	result, err := store.db.ExecContext(ctx, `
+		INSERT INTO kb_store (content, source, tags, source_hash, importance)
+		VALUES (?, ?, ?, ?, ?)`,
+		"OpenAI-compatible API supports C++ and Go backends", "legacy", `["english","api"]`, "fts-legacy-en", 0.7)
+	if err != nil {
+		t.Fatalf("写入 legacy 条目失败: %v", err)
+	}
+	legacyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("读取 legacy ID 失败: %v", err)
+	}
+
+	if err := store.RebuildFTS(ctx); err != nil {
+		t.Fatalf("legacy FTS 回填失败: %v", err)
+	}
+	var tokenized string
+	if err := store.db.QueryRowContext(ctx, "SELECT tokenized_content FROM kb_store WHERE id = ?", legacyID).Scan(&tokenized); err != nil {
+		t.Fatalf("读取回填 tokenized_content 失败: %v", err)
+	}
+	if tokenized == "" || tokenized == "OpenAI-compatible API supports C++ and Go backends" {
+		t.Fatalf("legacy 条目未被分词回填: %q", tokenized)
+	}
+
+	for _, query := range []string{"OpenAI", "API", "C++", "Go"} {
+		hits, err := store.Search(ctx, memory.SearchQuery{Text: query, Tier: memory.TierStore, TopK: 5})
+		if err != nil {
+			t.Fatalf("英文/特殊字符检索 %q 失败: %v", query, err)
+		}
+		if len(hits) == 0 || hits[0].MatchType != "fts" || hits[0].ID != legacyID {
+			t.Fatalf("英文/特殊字符检索 %q 应命中 FTS legacy 条目，实际: %+v", query, hits)
+		}
+	}
+
+	// 空查询应保持可预期的降级语义：无命中或显式错误均可，但绝不能 panic。
+	if _, err := store.Search(ctx, memory.SearchQuery{Text: "", Tier: memory.TierStore, TopK: 5}); err != nil {
+		t.Fatalf("空查询不应触发底层 FTS 错误: %v", err)
+	}
+}
+
 // TestStoreCache 验证缓存区（带 TTL）。
 func TestStoreCache(t *testing.T) {
 	store, _, _ := newTestStore(t)
@@ -132,7 +250,7 @@ func TestStoreCache(t *testing.T) {
 		t.Fatalf("List 缓存区失败: %v", err)
 	}
 	if len(entries) != 1 {
-		t.Errorf("缓存区应 1 条，实际 %d", len(entries))
+		t.Errorf("缓存区应 1 条，实际 %d 条", len(entries))
 	}
 }
 
@@ -150,14 +268,24 @@ func TestCompiler(t *testing.T) {
 	}
 
 	// 等待异步处理完成
-	time.Sleep(100 * time.Millisecond)
-
-	got, err := compiler.GetJob(ctx, job.ID)
-	if err != nil {
-		t.Fatalf("GetJob 失败: %v", err)
+	deadline := time.Now().Add(5 * time.Second)
+	var status memory.JobStatus
+	for time.Now().Before(deadline) {
+		got, err := compiler.GetJob(ctx, job.ID)
+		if err != nil {
+			t.Fatalf("GetJob 失败: %v", err)
+		}
+		status = got.Status
+		if status == memory.JobReady || status == memory.JobFailed {
+			if status == memory.JobFailed {
+				t.Fatalf("编译失败: %s", got.Error)
+			}
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
-	if got.Status != memory.JobReady {
-		t.Errorf("应到达 READY，实际 %s（error=%s）", got.Status, got.Error)
+	if status != memory.JobReady {
+		t.Errorf("应到达 READY，实际 %s", status)
 	}
 }
 
@@ -208,44 +336,135 @@ func (fakeEmbedder) EmbedBatch(_ context.Context, _ []string) ([][]float32, erro
 
 var _ Embedder = (*fakeEmbedder)(nil)
 
-// TestDistiller 验证蒸馏。
-func TestDistiller(t *testing.T) {
-	store, _, distiller := newTestStore(t)
+func TestCompilerStructuredExtractorAndEmbedding(t *testing.T) {
+	store, compiler, _ := newTestStore(t)
 	ctx := context.Background()
-
-	// 写入高频条目
-	if err := store.Upsert(ctx, memory.Entry{
-		Content:    "用户偏好使用深色主题",
-		SourceHash: "pref-1",
-		Importance: 0.9,
-	}); err != nil {
-		t.Fatalf("Upsert 失败: %v", err)
-	}
-
-	// 模拟高频访问（直接 update access_count）
-	db := distiller.db
-	if _, err := db.Exec("UPDATE kb_store SET access_count = 5 WHERE source_hash = 'pref-1'"); err != nil {
-		t.Fatalf("update access_count 失败: %v", err)
-	}
-
-	result, err := distiller.Distill(ctx, memory.DistillOptions{
-		MinEvidence:         1,
-		ImportanceThreshold: 0.5,
-	})
+	compiler.SetKnowledgeExtractor(staticCompilerExtractor{entries: []memory.Entry{{
+		Content:    "结构化提炼后的知识条目",
+		Tags:       []string{"结构化", "编译"},
+		Importance: 0.8,
+	}}})
+	compiler.SetEmbedder(fakeEmbedder1024{})
+	job, err := compiler.Compile(ctx, "原始资料不会直接作为最终条目", memory.CompileOptions{})
 	if err != nil {
-		t.Fatalf("Distill 失败: %v", err)
+		t.Fatal(err)
 	}
-	if result.Extracted == 0 {
-		t.Error("应蒸馏出至少 1 条偏好")
+	got := waitCompilerJob(t, compiler, job.ID)
+	if got.Status != memory.JobReady || got.Total != 1 {
+		t.Fatalf("job=%+v", got)
 	}
-
-	prefs, err := distiller.ListPreferences(ctx, 10)
+	hits, err := store.Search(ctx, memory.SearchQuery{Text: "结构化提炼", TopK: 5, QueryVector: make([]float32, 1024)})
 	if err != nil {
-		t.Fatalf("ListPreferences 失败: %v", err)
+		t.Fatal(err)
 	}
-	if len(prefs) == 0 {
-		t.Error("偏好列表为空")
-	} else {
-		t.Logf("偏好: %+v", prefs[0])
+	if len(hits) == 0 || hits[0].Content != "结构化提炼后的知识条目" || hits[0].MatchType != "both" {
+		t.Fatalf("structured compile hits=%+v", hits)
 	}
 }
+
+func TestCompilerExtractorFailureFallsBackToSource(t *testing.T) {
+	store, compiler, _ := newTestStore(t)
+	compiler.SetKnowledgeExtractor(staticCompilerExtractor{err: errors.New("extractor unavailable")})
+	job, err := compiler.Compile(context.Background(), "提炼失败时仍应保留原始知识文本", memory.CompileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitCompilerJob(t, compiler, job.ID)
+	if got.Status != memory.JobReady {
+		t.Fatalf("fallback job=%+v", got)
+	}
+	hits, err := store.Search(context.Background(), memory.SearchQuery{Text: "原始知识文本", TopK: 5})
+	if err != nil || len(hits) == 0 || hits[0].Content != "提炼失败时仍应保留原始知识文本" {
+		t.Fatalf("fallback hits=%+v err=%v", hits, err)
+	}
+}
+
+type staticCompilerExtractor struct {
+	entries []memory.Entry
+	err     error
+}
+
+func (e staticCompilerExtractor) Extract(context.Context, string) ([]memory.Entry, error) {
+	return e.entries, e.err
+}
+
+type fakeEmbedder1024 struct{}
+
+func (fakeEmbedder1024) EmbedBatch(context.Context, []string) ([][]float32, error) {
+	return [][]float32{make([]float32, DefaultVecDim)}, nil
+}
+
+func waitCompilerJob(t *testing.T, compiler *SQLiteCompiler, id string) *memory.CompileJob {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		job, err := compiler.GetJob(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == memory.JobReady || job.Status == memory.JobFailed {
+			return job
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("编译作业超时")
+	return nil
+}
+
+// TestDistillerLLMExtractionAndFallback 验证结构化提炼成功和失败回退。
+func TestDistillerLLMExtractionAndFallback(t *testing.T) {
+	store, _, distiller := newTestStore(t)
+	ctx := context.Background()
+	if err := store.Upsert(ctx, memory.Entry{Content: "用户偏好深色主题", SourceHash: "llm-pref", Importance: 0.9}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := distiller.db.ExecContext(ctx, "UPDATE kb_store SET access_count = 3 WHERE source_hash = ?", "llm-pref"); err != nil {
+		t.Fatal(err)
+	}
+
+	distiller.SetPrefExtractor(staticPrefExtractor{prefs: []memory.Preference{{Key: "主题", Value: "深色", Probability: 0.88}}})
+	result, err := distiller.Distill(ctx, memory.DistillOptions{MinEvidence: 1, ImportanceThreshold: 0.5})
+	if err != nil || result.Extracted != 1 {
+		t.Fatalf("LLM distill result=%+v err=%v", result, err)
+	}
+	prefs, err := distiller.ListPreferences(ctx, 10)
+	if err != nil || len(prefs) != 1 || prefs[0].Key != "主题" || prefs[0].EvidenceCnt != 1 || prefs[0].Probability != 0.88 {
+		t.Fatalf("LLM preferences=%+v err=%v", prefs, err)
+	}
+
+	if err := store.Upsert(ctx, memory.Entry{Content: "用户偏好简洁回答", SourceHash: "fallback-pref", Importance: 0.8}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := distiller.db.ExecContext(ctx, "UPDATE kb_store SET access_count = 2 WHERE source_hash = ?", "fallback-pref"); err != nil {
+		t.Fatal(err)
+	}
+	distiller.SetPrefExtractor(staticPrefExtractor{err: errors.New("fixture extractor failure")})
+	result, err = distiller.Distill(ctx, memory.DistillOptions{MinEvidence: 1, ImportanceThreshold: 0.5})
+	if err != nil || result.Extracted == 0 {
+		t.Fatalf("fallback distill result=%+v err=%v", result, err)
+	}
+	prefs, err = distiller.ListPreferences(ctx, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundFallback := false
+	for _, p := range prefs {
+		if p.Key == "用户偏好简洁回答" && p.EvidenceCnt >= 2 {
+			foundFallback = true
+		}
+	}
+	if !foundFallback {
+		t.Fatalf("未找到统计回退偏好: %+v", prefs)
+	}
+}
+
+type staticPrefExtractor struct {
+	prefs []memory.Preference
+	err   error
+}
+
+func (e staticPrefExtractor) Extract(context.Context, string) ([]memory.Preference, error) {
+	return e.prefs, e.err
+}
+
+var _ PrefExtractor = staticPrefExtractor{}
