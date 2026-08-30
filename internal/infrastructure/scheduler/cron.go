@@ -50,12 +50,12 @@ type cronLogger struct {
 }
 
 // Info 实现 cron.Logger。
-func (l *cronLogger) Info(msg string, keysAndValues ...interface{}) {
+func (l *cronLogger) Info(msg string, keysAndValues ...any) {
 	l.logger.Info(msg, keysAndValues...)
 }
 
 // Error 实现 cron.Logger。
-func (l *cronLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+func (l *cronLogger) Error(err error, msg string, keysAndValues ...any) {
 	l.logger.Error(msg, append(keysAndValues, "err", err)...)
 }
 
@@ -68,7 +68,12 @@ var _ cron.Logger = (*cronLogger)(nil)
 func (s *CronScheduler) Add(task scheduler.Task) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.addLocked(task)
+}
 
+// addLocked 注册任务，调用方必须已持有 s.mu 写锁。
+// 抽出以支持 Update 的"先注册新任务、成功后再移除旧任务"原子语义。
+func (s *CronScheduler) addLocked(task scheduler.Task) (string, error) {
 	if !task.Enabled {
 		return "", fmt.Errorf("任务未启用（Enabled=false）")
 	}
@@ -108,6 +113,29 @@ func (s *CronScheduler) Add(task scheduler.Task) (string, error) {
 	return id, nil
 }
 
+// Update 原子替换任务：先注册新任务，仅当新任务注册成功后才移除旧任务。
+// 语义保证：新任务非法（cron 表达式错误、闹钟过期、Enabled=false）时旧任务保持有效，
+// 不会出现"旧任务已删、新任务没建起来"的丢任务窗口。
+func (s *CronScheduler) Update(id string, task scheduler.Task) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.tasks[id]; !ok {
+		return "", fmt.Errorf("任务不存在: %s", id)
+	}
+
+	// 先建新：失败则旧任务原样保留
+	newID, err := s.addLocked(task)
+	if err != nil {
+		return "", err
+	}
+
+	// 新任务已就绪，再拆旧任务
+	s.removeLocked(id)
+	s.logger.Info("调度任务已更新", "old_id", id, "new_id", newID, "name", task.Name)
+	return newID, nil
+}
+
 // removeAlarm 移除已触发的闹钟（触发后自清理）。
 func (s *CronScheduler) removeAlarm(id string) {
 	s.mu.Lock()
@@ -123,6 +151,12 @@ func (s *CronScheduler) Remove(id string) error {
 	if _, ok := s.tasks[id]; !ok {
 		return fmt.Errorf("任务不存在: %s", id)
 	}
+	s.removeLocked(id)
+	return nil
+}
+
+// removeLocked 移除任务的实际清理逻辑，调用方必须已持有 s.mu 写锁且已确认任务存在。
+func (s *CronScheduler) removeLocked(id string) {
 	if eid, ok := s.entry[id]; ok {
 		s.cron.Remove(eid)
 		delete(s.entry, id)
@@ -132,7 +166,6 @@ func (s *CronScheduler) Remove(id string) error {
 		delete(s.alarms, id)
 	}
 	delete(s.tasks, id)
-	return nil
 }
 
 // RunNow 立即触发指定任务（不等待 cron 调度）。

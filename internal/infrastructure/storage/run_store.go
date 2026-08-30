@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Black0Bag/minibox/internal/domain/agent"
@@ -71,11 +72,11 @@ func (s *RunStore) SaveRun(run *agent.Run) error {
 // LoadRun 从 DB 恢复一个 Run（崩溃续跑）。
 func (s *RunStore) LoadRun(runID string) (*agent.Run, error) {
 	var (
-		state, mode       string
-		messagesJSON      string
-		pendingToolJSON   string
-		planJSON          string
-		seenCallsJSON     string
+		state, mode          string
+		messagesJSON         string
+		pendingToolJSON      string
+		planJSON             string
+		seenCallsJSON        string
 		createdAt, updatedAt string
 	)
 	run := &agent.Run{}
@@ -97,13 +98,21 @@ func (s *RunStore) LoadRun(runID string) (*agent.Run, error) {
 	}
 	if pendingToolJSON != "" {
 		var tc llm.ToolCall
-		if err := json.Unmarshal([]byte(pendingToolJSON), &tc); err == nil {
+		if err := json.Unmarshal([]byte(pendingToolJSON), &tc); err != nil {
+			// 不阻断恢复（Run 主体仍可用），但必须留痕：静默丢弃会导致
+			// 崩溃续跑时待执行工具凭空消失且无法排查。
+			slog.Warn("反序列化 pending_tool 失败，已跳过",
+				"run_id", runID, "err", err)
+		} else {
 			run.PendingTool = &tc
 		}
 	}
 	if planJSON != "" {
 		var p agent.Plan
-		if err := json.Unmarshal([]byte(planJSON), &p); err == nil {
+		if err := json.Unmarshal([]byte(planJSON), &p); err != nil {
+			slog.Warn("反序列化 plan 失败，已跳过",
+				"run_id", runID, "err", err)
+		} else {
 			run.Plan = &p
 		}
 	}

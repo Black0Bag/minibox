@@ -3,22 +3,25 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Black0Bag/minibox/internal/config"
-	plerrors "github.com/Black0Bag/minibox/internal/platform/errors"
 	"github.com/Black0Bag/minibox/internal/domain/llm"
 	"github.com/Black0Bag/minibox/internal/domain/memory"
 	"github.com/Black0Bag/minibox/internal/domain/permission"
-	"github.com/Black0Bag/minibox/internal/domain/tools"
-	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
 	"github.com/Black0Bag/minibox/internal/domain/scheduler"
 	"github.com/Black0Bag/minibox/internal/domain/teamwork"
+	"github.com/Black0Bag/minibox/internal/domain/tools"
+	"github.com/Black0Bag/minibox/internal/infrastructure/backup"
+	infratools "github.com/Black0Bag/minibox/internal/infrastructure/tools"
 	"github.com/Black0Bag/minibox/internal/infrastructure/upgrade"
+	plerrors "github.com/Black0Bag/minibox/internal/platform/errors"
 	"github.com/Black0Bag/minibox/internal/transport"
 )
 
@@ -410,6 +413,11 @@ func (a *App) handleKBRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.backup.Restore(req.Snapshot); err != nil {
+		// 非法快照名属于客户端输入错误 → 400；其余（IO/权限）→ 500
+		if errors.Is(err, backup.ErrInvalidSnapshotName) {
+			a.respondErr(w, r, http.StatusBadRequest, "invalid_snapshot", err.Error())
+			return
+		}
 		a.respondErr(w, r, http.StatusInternalServerError, "rollback_failed", err.Error())
 		return
 	}
@@ -519,19 +527,22 @@ func (a *App) handleScheduleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleScheduleUpdate 更新调度任务。
+// 原子语义：先解析请求体，再由 cron.Update 先建新任务、成功后才移除旧任务；
+// 新任务非法时旧任务保持有效（修复此前"先 Remove 后 Add 失败即丢任务"的缺陷）。
 func (a *App) handleScheduleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if err := a.cron.Remove(id); err != nil {
-		a.respondErr(w, r, http.StatusNotFound, "not_found", err.Error())
-		return
-	}
 	var task schedulerTask
 	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
 		a.respondErr(w, r, http.StatusBadRequest, "bad_request", "请求体无效")
 		return
 	}
-	newID, err := a.cron.Add(task.ToDomain())
+	newID, err := a.cron.Update(id, task.ToDomain())
 	if err != nil {
+		// 任务不存在 → 404；其余（cron 表达式非法、闹钟过期、未启用）→ 400
+		if strings.Contains(err.Error(), "任务不存在") {
+			a.respondErr(w, r, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
 		a.respondErr(w, r, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
@@ -569,11 +580,11 @@ func (a *App) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 // handleConfigUpdate 更新配置（运行时热重载可更新项）。
 func (a *App) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Logging  *config.LoggingConfig  `json:"logging,omitempty"`
-		LLM      *struct {
+		Logging *config.LoggingConfig `json:"logging,omitempty"`
+		LLM     *struct {
 			DefaultModel string `json:"default_model,omitempty"`
 		} `json:"llm,omitempty"`
-		Server   *struct {
+		Server *struct {
 			Port int `json:"port,omitempty"`
 		} `json:"server,omitempty"`
 	}
@@ -601,9 +612,9 @@ func (a *App) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 
 	a.UpdateConfig(cfg)
 	a.respondOK(w, r, "api.config.updated", map[string]any{
-		"server_port":      cfg.Server.Port,
-		"default_model":    cfg.LLM.DefaultModel,
-		"log_level":        cfg.Logging.Level,
+		"server_port":   cfg.Server.Port,
+		"default_model": cfg.LLM.DefaultModel,
+		"log_level":     cfg.Logging.Level,
 	})
 }
 
@@ -675,10 +686,10 @@ func (a *App) handleToolList(w http.ResponseWriter, r *http.Request) {
 	reg := a.toolReg()
 	list := reg.List()
 	type toolView struct {
-		Name        string            `json:"name"`
-		Description string            `json:"description"`
-		Metadata    tools.Metadata    `json:"metadata"`
-		JSONSchema  json.RawMessage   `json:"json_schema"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Metadata    tools.Metadata  `json:"metadata"`
+		JSONSchema  json.RawMessage `json:"json_schema"`
 	}
 	views := make([]toolView, 0, len(list))
 	for _, t := range list {
@@ -748,8 +759,8 @@ func (a *App) handleToolAcquire(w http.ResponseWriter, r *http.Request) {
 	// B8 闭环：下载成功后注册可执行包装，LLM 后续可直接调用该工具
 	a.registerExecTool(spec, res.Path)
 	a.respondOK(w, r, "api.tools.acquire", map[string]any{
-		"path":      res.Path,
-		"installed": res.Installed,
+		"path":       res.Path,
+		"installed":  res.Installed,
 		"registered": true,
 	})
 }
@@ -872,91 +883,97 @@ func (t schedulerTask) ToDomain() scheduler.Task {
 
 // handleTeamList 列出全部常设团队。
 func (a *App) handleTeamList(w http.ResponseWriter, r *http.Request) {
-if a.tw == nil {
-a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
-return
-}
-a.respondOK(w, r, "api.teamwork.teams", map[string]any{"teams": a.tw.Scheduler().Catalog.All()})
+	if a.tw == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
+		return
+	}
+	a.respondOK(w, r, "api.teamwork.teams", map[string]any{"teams": a.tw.Scheduler().Catalog.All()})
 }
 
 // handleTeamTriage 前台分诊：根据需求推荐团队。
 func (a *App) handleTeamTriage(w http.ResponseWriter, r *http.Request) {
-if a.tw == nil {
-a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
-return
-}
-var req struct{ Need string `json:"need"` }
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Need == "" {
-a.respondErr(w, r, http.StatusBadRequest, "bad_request", "need 必填")
-return
-}
-triage, err := a.tw.Triage(r.Context(), req.Need)
-if err != nil {
-a.respondErr(w, r, http.StatusBadRequest, "triage_failed", err.Error())
-return
-}
-a.respondOK(w, r, "api.teamwork.triage", triage)
+	if a.tw == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
+		return
+	}
+	var req struct {
+		Need string `json:"need"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Need == "" {
+		a.respondErr(w, r, http.StatusBadRequest, "bad_request", "need 必填")
+		return
+	}
+	triage, err := a.tw.Triage(r.Context(), req.Need)
+	if err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "triage_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.teamwork.triage", triage)
 }
 
 // handleTeamStart 确认团队后启动项目（组建团队 + 创建讨论）。
 func (a *App) handleTeamStart(w http.ResponseWriter, r *http.Request) {
-if a.tw == nil {
-a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
-return
-}
-var req struct{
-ProjectID string   `json:"project_id"`
-Question  string   `json:"question"`
-TeamID    string   `json:"team_id"`
-Tasks     []teamwork.TaskDependency `json:"tasks,omitempty"`
-}
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
-a.respondErr(w, r, http.StatusBadRequest, "bad_request", "question 必填")
-return
-}
-p, err := a.tw.StartProject(r.Context(), req.ProjectID, req.Question, req.TeamID, req.Tasks)
-if err != nil {
-a.respondErr(w, r, http.StatusBadRequest, "start_failed", err.Error())
-return
-}
-a.respondOK(w, r, "api.teamwork.start", p)
+	if a.tw == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
+		return
+	}
+	var req struct {
+		ProjectID string                    `json:"project_id"`
+		Question  string                    `json:"question"`
+		TeamID    string                    `json:"team_id"`
+		Tasks     []teamwork.TaskDependency `json:"tasks,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
+		a.respondErr(w, r, http.StatusBadRequest, "bad_request", "question 必填")
+		return
+	}
+	p, err := a.tw.StartProject(r.Context(), req.ProjectID, req.Question, req.TeamID, req.Tasks)
+	if err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "start_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.teamwork.start", p)
 }
 
 // handleTeamDiscuss 驱动一轮成员讨论（LLM 生成提案）。
 func (a *App) handleTeamDiscuss(w http.ResponseWriter, r *http.Request) {
-if a.tw == nil {
-a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
-return
-}
-id := chi.URLParam(r, "id")
-var req struct{ Prompt string `json:"prompt"` }
-_ = json.NewDecoder(r.Body).Decode(&req)
-props, err := a.tw.RunDiscussion(r.Context(), id, req.Prompt)
-if err != nil {
-a.respondErr(w, r, http.StatusBadRequest, "discuss_failed", err.Error())
-return
-}
-a.respondOK(w, r, "api.teamwork.discuss", map[string]any{"proposals": props})
+	if a.tw == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	props, err := a.tw.RunDiscussion(r.Context(), id, req.Prompt)
+	if err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "discuss_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.teamwork.discuss", map[string]any{"proposals": props})
 }
 
 // handleTeamConclude 组长裁决结案。
 func (a *App) handleTeamConclude(w http.ResponseWriter, r *http.Request) {
-if a.tw == nil {
-a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
-return
-}
-id := chi.URLParam(r, "id")
-var req struct{ Verdict string `json:"verdict"` }
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Verdict == "" {
-a.respondErr(w, r, http.StatusBadRequest, "bad_request", "verdict 必填")
-return
-}
-p, err := a.tw.Conclude(r.Context(), id, req.Verdict)
-if err != nil {
-a.respondErr(w, r, http.StatusBadRequest, "conclude_failed", err.Error())
-return
-}
-a.respondOK(w, r, "api.teamwork.conclude", p)
+	if a.tw == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Verdict string `json:"verdict"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Verdict == "" {
+		a.respondErr(w, r, http.StatusBadRequest, "bad_request", "verdict 必填")
+		return
+	}
+	p, err := a.tw.Conclude(r.Context(), id, req.Verdict)
+	if err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "conclude_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.teamwork.conclude", p)
 }
 
 // handleApprovalSubmit 提交 Agent 工具调用审批（P0-2）。
@@ -995,19 +1012,19 @@ func (a *App) handleApprovalSubmit(w http.ResponseWriter, r *http.Request) {
 
 // handleTeamStaff 人力增援审批（自进化：人手不足上报）。
 func (a *App) handleTeamStaff(w http.ResponseWriter, r *http.Request) {
-if a.tw == nil {
-a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
-return
-}
-var req teamwork.StaffingRequest
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-a.respondErr(w, r, http.StatusBadRequest, "bad_request", "请求体解析失败: "+err.Error())
-return
-}
-decisions, alarm, err := a.tw.RequestStaffing(r.Context(), req)
-if err != nil {
-a.respondErr(w, r, http.StatusBadRequest, "staffing_failed", err.Error())
-return
-}
-a.respondOK(w, r, "api.teamwork.staffing", map[string]any{"decisions": decisions, "alarm": alarm.String()})
+	if a.tw == nil {
+		a.respondErr(w, r, http.StatusServiceUnavailable, "teamwork_unavailable", "团队协作未就绪")
+		return
+	}
+	var req teamwork.StaffingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "bad_request", "请求体解析失败: "+err.Error())
+		return
+	}
+	decisions, alarm, err := a.tw.RequestStaffing(r.Context(), req)
+	if err != nil {
+		a.respondErr(w, r, http.StatusBadRequest, "staffing_failed", err.Error())
+		return
+	}
+	a.respondOK(w, r, "api.teamwork.staffing", map[string]any{"decisions": decisions, "alarm": alarm.String()})
 }
