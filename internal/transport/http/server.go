@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -24,10 +25,10 @@ import (
 // Server REST 传输层服务器。
 // 组合根注入依赖，启动后监听 config.Server。
 type Server struct {
-	cfg       config.ServerConfig
-	logger    *slog.Logger
-	router    chi.Router
-	httpSrv   *http.Server
+	cfg     config.ServerConfig
+	logger  *slog.Logger
+	router  chi.Router
+	httpSrv *http.Server
 	// tools 工具注册表（/tools 端点用）
 	toolReg   *tools.Registry
 	authToken string // Bearer Token 认证
@@ -124,12 +125,18 @@ func (s *Server) Router() chi.Router {
 // Start 启动 HTTP 监听（阻塞，支持优雅关闭）。
 func (s *Server) Start() error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.Listen, s.cfg.Port)
+	// ReadHeaderTimeout 防 Slowloris 慢速请求头攻击；旧配置文件未设置时回落 5s。
+	readHeaderTimeout := s.cfg.ReadHeaderTimeout
+	if readHeaderTimeout <= 0 {
+		readHeaderTimeout = 5 * time.Second
+	}
 	s.httpSrv = &http.Server{
-		Addr:         addr,
-		Handler:      s,
-		ReadTimeout:  s.cfg.ReadTimeout,
-		WriteTimeout: s.cfg.WriteTimeout,
-		IdleTimeout:  s.cfg.IdleTimeout,
+		Addr:              addr,
+		Handler:           s,
+		ReadTimeout:       s.cfg.ReadTimeout,
+		ReadHeaderTimeout: readHeaderTimeout,
+		WriteTimeout:      s.cfg.WriteTimeout,
+		IdleTimeout:       s.cfg.IdleTimeout,
 	}
 
 	s.logger.Info("REST 服务启动", "addr", addr)
@@ -153,7 +160,6 @@ func respondJSON(w http.ResponseWriter, status int, env *transport.Envelope) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(env)
 }
-
 
 // respondError 写 RFC 7807 错误信封（REST 错误路径专用）。
 func respondError(w http.ResponseWriter, status int, typ, title, detail, instance string) {

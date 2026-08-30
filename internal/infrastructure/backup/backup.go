@@ -5,11 +5,17 @@ package backup
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+// ErrInvalidSnapshotName 快照名非法（含路径分隔符、..、非 .db 等）。
+// 属于调用方输入错误，上层应映射为 400 而非 500。
+var ErrInvalidSnapshotName = errors.New("非法快照名")
 
 // Manager 备份管理器。
 type Manager struct {
@@ -71,7 +77,12 @@ func (m *Manager) List() ([]string, error) {
 }
 
 // Restore 从快照恢复（需先停服务，上层调用方保证）。
+// snapName 只接受 List() 返回的裸文件名；含路径分隔符或 .. 的输入一律拒绝，
+// 防止 REST 层传入 "../../x.db" 之类路径穿越到备份目录之外替换任意文件。
 func (m *Manager) Restore(snapName string) error {
+	if err := validateSnapName(snapName); err != nil {
+		return err
+	}
 	snapPath := filepath.Join(m.backupDir, snapName)
 	if _, err := os.Stat(snapPath); err != nil {
 		return fmt.Errorf("快照不存在: %s", snapName)
@@ -82,6 +93,24 @@ func (m *Manager) Restore(snapName string) error {
 	}
 	if err := os.Rename(snapPath, m.dbPath); err != nil {
 		return fmt.Errorf("恢复快照失败: %w", err)
+	}
+	return nil
+}
+
+// validateSnapName 校验快照名是裸文件名且为 .db，拒绝路径穿越。
+// 所有失败都包装 ErrInvalidSnapshotName，便于上层用 errors.Is 映射 400。
+func validateSnapName(snapName string) error {
+	if snapName == "" {
+		return fmt.Errorf("%w: 快照名为空", ErrInvalidSnapshotName)
+	}
+	// 拒绝任何路径成分：目录分隔符（含 Windows 反斜杠）、.. 与绝对路径
+	if strings.ContainsAny(snapName, `/\`) ||
+		snapName == ".." || strings.Contains(snapName, "..") ||
+		filepath.Base(snapName) != snapName || filepath.IsAbs(snapName) {
+		return fmt.Errorf("%w（不允许路径分隔符或 ..）: %s", ErrInvalidSnapshotName, snapName)
+	}
+	if filepath.Ext(snapName) != ".db" {
+		return fmt.Errorf("%w（必须为 .db）: %s", ErrInvalidSnapshotName, snapName)
 	}
 	return nil
 }

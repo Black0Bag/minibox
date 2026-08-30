@@ -49,6 +49,9 @@ type ServerConfig struct {
 	IPv6 bool `koanf:"ipv6"`
 	// ReadTimeout HTTP 读超时。
 	ReadTimeout time.Duration `koanf:"read_timeout"`
+	// ReadHeaderTimeout 请求头读取超时（Slowloris 慢速攻击防护）。
+	// 独立于 ReadTimeout：即使 body 允许长时间读取，请求头也必须尽快读完。
+	ReadHeaderTimeout time.Duration `koanf:"read_header_timeout"`
 	// WriteTimeout HTTP 写超时。
 	WriteTimeout time.Duration `koanf:"write_timeout"`
 	// IdleTimeout 空闲连接超时。
@@ -162,13 +165,14 @@ type AuthConfig struct {
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
-			Port:            8086,
-			Listen:          "127.0.0.1",
-			IPv6:            false,
-			ReadTimeout:     30 * time.Second,
-			WriteTimeout:    30 * time.Second,
-			IdleTimeout:     120 * time.Second,
-			ShutdownTimeout: 15 * time.Second,
+			Port:              8086,
+			Listen:            "127.0.0.1",
+			IPv6:              false,
+			ReadTimeout:       30 * time.Second,
+			ReadHeaderTimeout: 5 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			ShutdownTimeout:   15 * time.Second,
 		},
 		Database: DatabaseConfig{
 			Path:         "data/minibox.db",
