@@ -26,9 +26,9 @@ type SystemConfigStore interface {
 // FeatureRouter 功能级模型路由（B6 装饰器）。
 // 包装 Router，根据 req.Feature 选择模型。
 type FeatureRouter struct {
-	inner  *Router                     // 底层路由（含所有 ProviderEntry）
-	models *llm.FeatureModels          // 功能→模型映射（可运行时更新）
-	store  SystemConfigStore           // 持久化（非 nil 时 PATCH 自动写 DB）
+	inner  *Router            // 底层路由（含所有 ProviderEntry）
+	models *llm.FeatureModels // 功能→模型映射（可运行时更新）
+	store  SystemConfigStore  // 持久化（非 nil 时 PATCH 自动写 DB）
 	logger *slog.Logger
 }
 
@@ -121,10 +121,10 @@ func (fr *FeatureRouter) Models(ctx context.Context) ([]llm.ModelInfo, error) {
 
 // resolve 根据 req.Feature 和功能级配置解析出最终请求。
 // 策略：
-//   1. req.Model 已设置 → 直接使用（调用方显式指定优先级最高）
-//   2. 功能级配置存在且指定 Provider → 设置 req.Model 并标记 Provider 偏好
-//   3. 功能级配置存在但未指定 Provider → 仅设置 req.Model
-//   4. 均未配置 → 保持 req.Model=""，由 Router 按默认策略路由
+//  1. req.Model 已设置 → 直接使用（调用方显式指定优先级最高）
+//  2. 功能级配置存在且指定 Provider → 设置 req.Model 并标记 Provider 偏好
+//  3. 功能级配置存在但未指定 Provider → 仅设置 req.Model
+//  4. 均未配置 → 保持 req.Model=""，由 Router 按默认策略路由
 func (fr *FeatureRouter) resolve(req llm.Request) (llm.Request, error) {
 	if req.Model != "" {
 		return req, nil
@@ -150,4 +150,3 @@ func (fr *FeatureRouter) resolve(req llm.Request) (llm.Request, error) {
 
 	return req, nil
 }
-

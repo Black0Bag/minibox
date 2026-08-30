@@ -1,6 +1,8 @@
 // Package teamwork 团队协作编排引擎（T 系列）。
 // 作用：把 domain/teamwork 的数据模型（Scheduler/Discussion/HR/Trust）串成可运行流程：
-//   前台分诊 → 组建团队 → 成员讨论（LLM 驱动 IPP 协议）→ 组长裁决 → HR 审批 → 结案。
+//
+//	前台分诊 → 组建团队 → 成员讨论（LLM 驱动 IPP 协议）→ 组长裁决 → HR 审批 → 结案。
+//
 // 分层：本包在 infrastructure 层，import domain/teamwork 数据模型 + domain/llm 接口，
 // 不 import 平台/传输/存储；具体 LLM 供应商由 app 层经 llm.Provider 注入。
 package teamwork
@@ -64,8 +66,8 @@ func NewCoordinator(log *slog.Logger, sched *teamwork.Scheduler, llm LLM) *Coord
 	}
 	return &Coordinator{
 		log:      log,
-		sched:   sched,
-		llm:     llm,
+		sched:    sched,
+		llm:      llm,
 		projects: make(map[string]*Project),
 	}
 }
@@ -206,9 +208,9 @@ func (c *Coordinator) generateProposal(ctx context.Context, m teamwork.Member, q
 	user += "\n请以你的专业角色视角，给出对问题的一句话方案提案（不含冗长分析）。"
 
 	resp, err := c.llm.Complete(ctx, llm.Request{
-		Model:     "",
-		Feature:   llm.FeatureAgent,
-		Messages:  []llm.Message{{Role: llm.RoleSystem, Content: sys}, {Role: llm.RoleUser, Content: user}},
+		Model:    "",
+		Feature:  llm.FeatureAgent,
+		Messages: []llm.Message{{Role: llm.RoleSystem, Content: sys}, {Role: llm.RoleUser, Content: user}},
 	})
 	if err != nil {
 		return "", err

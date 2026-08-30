@@ -87,7 +87,7 @@ func (r *Router) completeRoundRobin(ctx context.Context, req llm.Request) (*llm.
 	}
 	start := r.rrIdx.Add(1)
 	var lastErr error
-	for i := 0; i < len(r.entries); i++ {
+	for i := range len(r.entries) {
 		idx := int((start + int64(i)) % int64(len(r.entries)))
 		entry := r.entries[idx]
 

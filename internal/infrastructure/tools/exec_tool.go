@@ -14,9 +14,9 @@ import (
 // Invoke 通过 IsolatedRun 执行（隔离 PATH + 独立参数传参，禁 shell）。
 // 设计：LLM 经 acquire_tool 请求下载 → 下载成功 → 注册此工具 → 之后 LLM 可直接调用。
 type execTool struct {
-	name string
-	path string
-	spec ToolSpec
+	name      string
+	path      string
+	spec      ToolSpec
 	argSchema json.RawMessage
 }
 

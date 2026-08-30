@@ -68,11 +68,11 @@ type HITLCallback func(ctx context.Context, action Action) (bool, error)
 
 // Guard 设备护栏。
 type Guard struct {
-	mu      sync.Mutex
-	rules   map[string]DangerRule
-	hitl    HITLCallback
-	window  time.Duration
-	calls   map[string][]time.Time // key: deviceID+"|"+method → 调用时间戳
+	mu     sync.Mutex
+	rules  map[string]DangerRule
+	hitl   HITLCallback
+	window time.Duration
+	calls  map[string][]time.Time // key: deviceID+"|"+method → 调用时间戳
 }
 
 // New 创建设备护栏。

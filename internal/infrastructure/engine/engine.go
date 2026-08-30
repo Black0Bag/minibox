@@ -27,8 +27,8 @@ type Engine struct {
 		Warn(msg string, args ...any)
 		Error(msg string, args ...any)
 	}
-	gate *MemoryGate // 强制记忆门（记忆中心化）
-	store RunStorer  // 运行持久化（B5 崩溃续跑，nil=纯内存模式）
+	gate  *MemoryGate // 强制记忆门（记忆中心化）
+	store RunStorer   // 运行持久化（B5 崩溃续跑，nil=纯内存模式）
 
 	mu   sync.RWMutex
 	runs map[string]*agent.Run

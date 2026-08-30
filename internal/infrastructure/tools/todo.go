@@ -42,13 +42,13 @@ func (t *todoTool) Invoke(ctx context.Context, input json.RawMessage) (string, e
 	if args == nil {
 		args = make(map[string]json.RawMessage)
 	}
-	
+
 	// 从上下文获取当前 Run（需要注入）
 	run := getRunFromContext(ctx)
 	if run == nil {
 		return "", fmt.Errorf("无法获取当前 Agent Run")
 	}
-	
+
 	return t.fn(ctx, run, args)
 }
 
@@ -77,10 +77,10 @@ func NewTodoCreate() tools.Tool {
 			"required":["content"]
 		}`),
 		meta: tools.Metadata{
-			ReadOnly:        false,
-			ConcurrencySafe: true,
-			MaxResultSize:   512,
-			RiskTier:        "low",
+			ReadOnly:         false,
+			ConcurrencySafe:  true,
+			MaxResultSize:    512,
+			RiskTier:         "low",
 			RequiresApproval: false,
 		},
 		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
@@ -88,10 +88,10 @@ func NewTodoCreate() tools.Tool {
 			if err != nil {
 				return "", err
 			}
-			
+
 			// 生成新任务ID
 			id := uuid.New().String()
-			
+
 			// 创建新的 TodoItem
 			item := agent.TodoItem{
 				ID:        id,
@@ -99,10 +99,10 @@ func NewTodoCreate() tools.Tool {
 				Status:    agent.TodoPending,
 				CreatedAt: time.Now(),
 			}
-			
+
 			// 添加到 Run 的 TodoItems 列表
 			run.TodoItems = append(run.TodoItems, item)
-			
+
 			return fmt.Sprintf("已创建任务: %s (ID: %s)", content, id), nil
 		},
 	}
@@ -122,10 +122,10 @@ func NewTodoUpdate() tools.Tool {
 			"required":["id","status"]
 		}`),
 		meta: tools.Metadata{
-			ReadOnly:        false,
-			ConcurrencySafe: true,
-			MaxResultSize:   512,
-			RiskTier:        "low",
+			ReadOnly:         false,
+			ConcurrencySafe:  true,
+			MaxResultSize:    512,
+			RiskTier:         "low",
 			RequiresApproval: false,
 		},
 		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
@@ -133,12 +133,12 @@ func NewTodoUpdate() tools.Tool {
 			if err != nil {
 				return "", err
 			}
-			
+
 			statusStr, err := strArg(args, "status")
 			if err != nil {
 				return "", err
 			}
-			
+
 			// 解析状态
 			var status agent.TodoStatus
 			switch statusStr {
@@ -151,13 +151,13 @@ func NewTodoUpdate() tools.Tool {
 			default:
 				return "", fmt.Errorf("无效的状态: %s", statusStr)
 			}
-			
+
 			// 查找并更新任务
 			for i := range run.TodoItems {
 				if run.TodoItems[i].ID == id {
 					oldStatus := run.TodoItems[i].Status
 					run.TodoItems[i].Status = status
-					
+
 					// 更新时间戳
 					now := time.Now()
 					switch status {
@@ -166,11 +166,11 @@ func NewTodoUpdate() tools.Tool {
 					case agent.TodoCompleted:
 						run.TodoItems[i].CompletedAt = now
 					}
-					
+
 					return fmt.Sprintf("任务 %s 状态已从 %s 更新为 %s", id, oldStatus, status), nil
 				}
 			}
-			
+
 			return "", fmt.Errorf("未找到ID为 %s 的任务", id)
 		},
 	}
@@ -186,20 +186,20 @@ func NewTodoList() tools.Tool {
 			"properties":{}
 		}`),
 		meta: tools.Metadata{
-			ReadOnly:        true,
-			ConcurrencySafe: true,
-			MaxResultSize:   4096,
-			RiskTier:        "low",
+			ReadOnly:         true,
+			ConcurrencySafe:  true,
+			MaxResultSize:    4096,
+			RiskTier:         "low",
 			RequiresApproval: false,
 		},
 		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
 			if len(run.TodoItems) == 0 {
 				return "当前没有待办任务", nil
 			}
-			
+
 			var sb strings.Builder
 			sb.WriteString("待办任务列表:\n")
-			
+
 			for _, item := range run.TodoItems {
 				statusEmoji := "⏳"
 				switch item.Status {
@@ -208,10 +208,10 @@ func NewTodoList() tools.Tool {
 				case agent.TodoCompleted:
 					statusEmoji = "✅"
 				}
-				
+
 				sb.WriteString(fmt.Sprintf("%s [%s] %s\n", statusEmoji, item.ID[:8], item.Content))
 			}
-			
+
 			return sb.String(), nil
 		},
 	}
@@ -230,10 +230,10 @@ func NewTodoDelete() tools.Tool {
 			"required":["id"]
 		}`),
 		meta: tools.Metadata{
-			ReadOnly:        false,
-			ConcurrencySafe: true,
-			MaxResultSize:   512,
-			RiskTier:        "low",
+			ReadOnly:         false,
+			ConcurrencySafe:  true,
+			MaxResultSize:    512,
+			RiskTier:         "low",
 			RequiresApproval: false,
 		},
 		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
@@ -241,18 +241,18 @@ func NewTodoDelete() tools.Tool {
 			if err != nil {
 				return "", err
 			}
-			
+
 			// 查找并删除任务
 			for i := range run.TodoItems {
 				if run.TodoItems[i].ID == id {
 					deletedItem := run.TodoItems[i]
 					// 从切片中删除
 					run.TodoItems = append(run.TodoItems[:i], run.TodoItems[i+1:]...)
-					
+
 					return fmt.Sprintf("已删除任务: %s (ID: %s)", deletedItem.Content, id), nil
 				}
 			}
-			
+
 			return "", fmt.Errorf("未找到ID为 %s 的任务", id)
 		},
 	}

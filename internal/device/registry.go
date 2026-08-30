@@ -4,8 +4,8 @@ import "sync"
 
 // Registry 设备注册表（D-04：多设备管理）。
 type Registry struct {
-	mu       sync.RWMutex
-	aliases  map[string]string // alias → deviceID
+	mu      sync.RWMutex
+	aliases map[string]string // alias → deviceID
 }
 
 // NewRegistry 创建设备注册表。

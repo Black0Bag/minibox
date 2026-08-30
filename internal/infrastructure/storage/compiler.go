@@ -175,7 +175,7 @@ func chunkSource(source string, maxTokens int) []string {
 func splitParagraphs(source string) []string {
 	var out []string
 	start := 0
-	for i := 0; i < len(source); i++ {
+	for i := range len(source) {
 		if i > 0 && source[i] == '\n' && source[i-1] == '\n' {
 			if seg := source[start:i]; seg != "" {
 				out = append(out, seg)

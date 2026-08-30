@@ -9,13 +9,13 @@ import (
 // Method names (design doc WS method list).
 const (
 	// device.* — device control
-	MethodDeviceScreenCapture   = "device.screen.capture"
-	MethodDeviceCameraPhoto     = "device.camera.photo"
-	MethodDeviceMicrophoneRec   = "device.microphone.record_start"
-	MethodDeviceMicrophoneStop  = "device.microphone.record_stop"
-	MethodDeviceInputTap        = "device.input.tap"
-	MethodDeviceInputSwipe      = "device.input.swipe"
-	MethodDeviceInputText       = "device.input.text"
+	MethodDeviceScreenCapture  = "device.screen.capture"
+	MethodDeviceCameraPhoto    = "device.camera.photo"
+	MethodDeviceMicrophoneRec  = "device.microphone.record_start"
+	MethodDeviceMicrophoneStop = "device.microphone.record_stop"
+	MethodDeviceInputTap       = "device.input.tap"
+	MethodDeviceInputSwipe     = "device.input.swipe"
+	MethodDeviceInputText      = "device.input.text"
 	MethodDeviceNotifyShow     = "device.notify.show"
 	MethodDeviceTTSSpeak       = "device.tts.speak"
 	MethodDeviceClipboardSet   = "device.clipboard.set"
@@ -23,8 +23,8 @@ const (
 	MethodDeviceFileList       = "device.file.list"
 	MethodDeviceFileRead       = "device.file.read"
 	MethodDeviceFileWrite      = "device.file.write"
-	MethodDeviceAppOpen         = "device.app.open"
-	MethodDeviceSMSSend         = "device.sms.send"
+	MethodDeviceAppOpen        = "device.app.open"
+	MethodDeviceSMSSend        = "device.sms.send"
 	MethodDeviceContactList    = "device.contact.list"
 	MethodDeviceSettingsGet    = "device.settings.get"
 	MethodDeviceSettingsSet    = "device.settings.set"
@@ -47,9 +47,9 @@ const (
 	MethodEventAck  = "event.ack"
 
 	// system.* — system info
-	MethodSystemInfo   = "system.info"
-	MethodSystemStats  = "system.stats"
-	MethodSystemLog    = "system.log"
+	MethodSystemInfo  = "system.info"
+	MethodSystemStats = "system.stats"
+	MethodSystemLog   = "system.log"
 )
 
 // RegisterDefaultHandlers 注册全部内置 method 处理器。
@@ -129,10 +129,10 @@ func (s *Server) handleEventAck(ctx context.Context, c *Client, params json.RawM
 // handleSystemInfo 返回系统信息。
 func (s *Server) handleSystemInfo(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
 	return map[string]any{
-		"version":     "1.0",
-		"protocol":   "1.0",
-		"client_id":   c.ID,
-		"methods":     []string{"device.*", "browser.*", "peer.*", "event.*", "system.*", "heartbeat.*"},
+		"version":   "1.0",
+		"protocol":  "1.0",
+		"client_id": c.ID,
+		"methods":   []string{"device.*", "browser.*", "peer.*", "event.*", "system.*", "heartbeat.*"},
 	}, nil
 }
 
@@ -142,8 +142,8 @@ func (s *Server) handleSystemStats(ctx context.Context, c *Client, params json.R
 	clientCount := len(s.clients)
 	s.mu.RUnlock()
 	return map[string]any{
-		"clients":    clientCount,
-		"routes":     len(s.routes),
+		"clients": clientCount,
+		"routes":  len(s.routes),
 	}, nil
 }
 

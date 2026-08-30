@@ -21,12 +21,12 @@ import (
 
 // ProblemDetail RFC 7807 问题详情对象。
 type ProblemDetail struct {
-	Type string `json:"type"`
-	Title string `json:"title"`
-	Status int `json:"status"`
-	Detail string `json:"detail"`
-	Instance string `json:"instance,omitempty"`
-	Members map[string]any `json:"-"`
+	Type     string         `json:"type"`
+	Title    string         `json:"title"`
+	Status   int            `json:"status"`
+	Detail   string         `json:"detail"`
+	Instance string         `json:"instance,omitempty"`
+	Members  map[string]any `json:"-"`
 }
 
 // Write 将 ProblemDetail 写入 HTTP 响应。

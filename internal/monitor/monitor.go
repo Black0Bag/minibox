@@ -56,8 +56,8 @@ type ProcessStats struct {
 
 // Metrics 完整指标快照（系统级 + 进程级）。
 type Metrics struct {
-	System    SystemStats  `json:"system"`
-	Process   ProcessStats `json:"process"`
+	System  SystemStats  `json:"system"`
+	Process ProcessStats `json:"process"`
 	// Timestamp 采集时间戳。
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -258,7 +258,7 @@ func parseUint(s string) (uint64, error) {
 		return 0, os.ErrInvalid
 	}
 	var out uint64
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] < '0' || s[i] > '9' {
 			return 0, os.ErrInvalid
 		}

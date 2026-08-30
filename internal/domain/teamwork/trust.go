@@ -77,15 +77,15 @@ type Profile struct {
 // NewProfile 创建信任档案（新成员默认 3.0 观察期）。
 func NewProfile(memberID string) *Profile {
 	return &Profile{
-		MemberID:              memberID,
-		SuccessRate:           3.0,
-		ReasoningConsistency:  3.0,
-		ToolAccuracy:          3.0,
-		Compliance:            3.0,
-		SettlementRate:        3.0,
-		MaintenanceDecay:      3.0,
+		MemberID:                 memberID,
+		SuccessRate:              3.0,
+		ReasoningConsistency:     3.0,
+		ToolAccuracy:             3.0,
+		Compliance:               3.0,
+		SettlementRate:           3.0,
+		MaintenanceDecay:         3.0,
 		ConversationsSinceAssign: 0,
-		UpdatedAt:             time.Now(),
+		UpdatedAt:                time.Now(),
 	}
 }
 

@@ -10,17 +10,17 @@ import (
 
 // Device 已注册设备。
 type Device struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Model        string            `json:"model"`
-	Android      string            `json:"android"`       // Android 版本
-	Capabilities []string          `json:"capabilities"`  // 能力列表
-	Permissions  map[string]bool   `json:"permissions"`   // 权限状态
-	Online       bool              `json:"online"`
-	ConnectedAt  time.Time         `json:"connected_at"`
-	LastSeen     time.Time         `json:"last_seen"`
-	PairCode     string            `json:"-"`             // 配对码（不暴露）
-	Paired       bool              `json:"paired"`
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Model        string          `json:"model"`
+	Android      string          `json:"android"`      // Android 版本
+	Capabilities []string        `json:"capabilities"` // 能力列表
+	Permissions  map[string]bool `json:"permissions"`  // 权限状态
+	Online       bool            `json:"online"`
+	ConnectedAt  time.Time       `json:"connected_at"`
+	LastSeen     time.Time       `json:"last_seen"`
+	PairCode     string          `json:"-"` // 配对码（不暴露）
+	Paired       bool            `json:"paired"`
 }
 
 // Command 下发命令。

@@ -11,12 +11,12 @@ import (
 const (
 	// 流式推理事件（7 种，已有）
 	EventTextMessageContent = "agent.text_message_content"
-	EventReasoningDelta    = "agent.reasoning_delta"
-	EventToolCallArgs      = "agent.tool_call_args"
-	EventTextMessageEnd    = "agent.text_message_end"
-	EventRunError          = "agent.run_error"
-	EventToolCallStart     = "agent.tool_call_start"
-	EventToolCallResult    = "agent.tool_call_result"
+	EventReasoningDelta     = "agent.reasoning_delta"
+	EventToolCallArgs       = "agent.tool_call_args"
+	EventTextMessageEnd     = "agent.text_message_end"
+	EventRunError           = "agent.run_error"
+	EventToolCallStart      = "agent.tool_call_start"
+	EventToolCallResult     = "agent.tool_call_result"
 
 	// 运行生命周期事件（5 种，补齐）
 	EventTextMessageStart  = "agent.text_message_start"
@@ -116,6 +116,7 @@ func (n *Normalizer) MapToolResult(call llm.ToolCall, result string) UIEvent {
 		Content:    result,
 	}
 }
+
 // MapTextMessageStart 生成消息开始事件（流式推理前发，前端可显示"正在输入"）。
 func (n *Normalizer) MapTextMessageStart() UIEvent {
 	return UIEvent{

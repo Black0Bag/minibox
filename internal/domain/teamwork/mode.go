@@ -60,4 +60,3 @@ func (l Level) CanSpawn() bool {
 func (l Level) Valid() bool {
 	return l >= Level1 && l <= MaxLevel
 }
-

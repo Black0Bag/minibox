@@ -25,7 +25,7 @@ func (p structProvider) Read() (map[string]any, error) {
 }
 
 // Watch 不支持（无热更新）。
-func (p structProvider) Watch(_ func(event interface{}, err error)) error {
+func (p structProvider) Watch(_ func(event any, err error)) error {
 	return nil
 }
 
@@ -45,7 +45,7 @@ func structToMapInner(val reflect.Value, out map[string]any) {
 		return
 	}
 	t := val.Type()
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		field := t.Field(i)
 		key := field.Tag.Get("koanf")
 		if key == "" || key == "-" {

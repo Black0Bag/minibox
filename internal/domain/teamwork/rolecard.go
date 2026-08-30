@@ -6,7 +6,7 @@ import (
 
 // RoleCard 角色卡（四模块格式）。
 // 设计：角色卡以 Markdown 存知识库，四模块为：
-//   1. 角色与核心身份 2. 约束与边界 3. 工具授权 4. 输出规范。
+//  1. 角色与核心身份 2. 约束与边界 3. 工具授权 4. 输出规范。
 type RoleCard struct {
 	ID   string `json:"id"`
 	Name string `json:"name"` // 角色名，如「架构师」「调试员」

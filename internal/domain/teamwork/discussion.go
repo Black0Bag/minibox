@@ -46,9 +46,9 @@ type Discussion struct {
 
 // Proposal 成员提案。
 type Proposal struct {
-	Round   int    `json:"round"`
+	Round    int    `json:"round"`
 	MemberID string `json:"member_id"`
-	Content string `json:"content"`
+	Content  string `json:"content"`
 	// Critique 批评阶段：其他成员对提案的批评（不强求共识）。
 	Critiques []Critique `json:"critiques,omitempty"`
 }
@@ -62,12 +62,12 @@ type Critique struct {
 // NewDiscussion 创建讨论（问题锁 + 组长 + 轮次上限）。
 func NewDiscussion(question, leadID string) *Discussion {
 	return &Discussion{
-		Question:   strings.TrimSpace(question),
-		LeadID:     leadID,
-		Round:      0,
-		MaxRounds:  5,
-		Proposals:  make(map[int][]Proposal),
-		StartedAt:  time.Now(),
+		Question:  strings.TrimSpace(question),
+		LeadID:    leadID,
+		Round:     0,
+		MaxRounds: 5,
+		Proposals: make(map[int][]Proposal),
+		StartedAt: time.Now(),
 	}
 }
 
@@ -241,5 +241,3 @@ func PlanDispatch(tasks []TaskDependency) (DispatchPlan, error) {
 	}
 	return plan, nil
 }
-
-

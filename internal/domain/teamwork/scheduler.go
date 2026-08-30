@@ -78,11 +78,8 @@ func (s *Scheduler) TriageTask(_ context.Context, need string) (*Triage, error) 
 		t.NeedClarify = false
 	} else {
 		// 需求模糊 → 取前 2-3 备选。
-		n := len(matches)
-		if n > 3 {
-			n = 3
-		}
-		for i := 0; i < n; i++ {
+		n := min(len(matches), 3)
+		for i := range n {
 			t.Recommended = append(t.Recommended, TeamRecommendation{
 				Team:   &matches[i],
 				Reason: "候选团队，待用户确认",
