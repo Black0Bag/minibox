@@ -236,12 +236,23 @@ func (s *SQLiteStore) Upsert(ctx context.Context, e memory.Entry) error {
 	}
 
 	if e.ID > 0 {
-		result, err := s.db.ExecContext(ctx, `
-			UPDATE kb_store
-			SET content = ?, tokenized_content = ?, source = ?, tags = ?,
-			    source_hash = ?, importance = ?, updated_at = datetime('now')
-			WHERE id = ?`,
-			e.Content, tokenized, e.Source, string(tagsJSON), e.SourceHash, e.Importance, e.ID)
+		// 若客户端未提供 source_hash（HTTP PATCH 场景），保留数据库原值避免 UNIQUE 约束冲突。
+		var result sql.Result
+		if e.SourceHash != "" {
+			result, err = s.db.ExecContext(ctx, `
+				UPDATE kb_store
+				SET content = ?, tokenized_content = ?, source = ?, tags = ?,
+				    source_hash = ?, importance = ?, updated_at = datetime('now')
+				WHERE id = ?`,
+				e.Content, tokenized, e.Source, string(tagsJSON), e.SourceHash, e.Importance, e.ID)
+		} else {
+			result, err = s.db.ExecContext(ctx, `
+				UPDATE kb_store
+				SET content = ?, tokenized_content = ?, source = ?, tags = ?,
+				    importance = ?, updated_at = datetime('now')
+				WHERE id = ?`,
+				e.Content, tokenized, e.Source, string(tagsJSON), e.Importance, e.ID)
+		}
 		if err != nil {
 			return fmt.Errorf("更新知识条目失败: %w", err)
 		}
