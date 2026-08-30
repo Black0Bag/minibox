@@ -24,6 +24,16 @@ jobs:
       - name: 下载依赖
         run: go mod download
 
+      - name: 格式检查（gofmt）
+        run: |
+          # gofmt 不合规直接失败，避免格式漂移污染 diff
+          unformatted="$(gofmt -l internal cmd)"
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt："
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: 代码检查（go vet）
         run: go vet ./...
 
@@ -34,6 +44,25 @@ jobs:
         run: |
           # 分层约束由 internal/arch 测试强制（domain 不依赖 infra/transport/app 等）
           go test -count=1 ./internal/arch/
+
+  race:
+    name: 竞态检测（Linux x86_64）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+          cache: true
+
+      - name: 测试（-race）
+        # ThreadSanitizer 需要 CGO + Linux x86_64；开发机 Android/arm64 无法提供该证据，
+        # 因此竞态证据只在本 job 产出（docs/validation.md 已记录该限制）。
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race -count=1 ./...
 
   lint:
     name: 静态检查
