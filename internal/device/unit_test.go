@@ -197,16 +197,16 @@ func TestDeviceTools_眼手口耳计数(t *testing.T) {
 
 func TestDeviceTools_参数契约(t *testing.T) {
 	requiredCases := map[string][]string{
-		"设备_点击":       {"x", "y"},
-		"设备_滑动":       {"x1", "y1", "x2", "y2"},
-		"设备_输入文字":     {"text"},
-		"设备_按键":       {"key"},
-		"设备_打开应用":     {"package_name"},
-		"设备_滚动查找":     {"text"},
-		"设备_朗读":       {"text"},
-		"设备_提示":       {"message"},
-		"设备_通知":       {"title", "text"},
-		"设备_监听":       {"events"},
+		"设备_点击":   {"x", "y"},
+		"设备_滑动":   {"x1", "y1", "x2", "y2"},
+		"设备_输入文字": {"text"},
+		"设备_按键":   {"key"},
+		"设备_打开应用": {"package_name"},
+		"设备_滚动查找": {"text"},
+		"设备_朗读":   {"text"},
+		"设备_提示":   {"message"},
+		"设备_通知":   {"title", "text"},
+		"设备_监听":   {"events"},
 	}
 
 	found := map[string]ToolDef{}

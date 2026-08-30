@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,96 @@ func TestRemove(t *testing.T) {
 	}
 	if len(s.List()) != 0 {
 		t.Fatal("移除后应无任务")
+	}
+}
+
+// TestUpdate 原子更新：成功路径替换任务，旧 ID 失效、新 ID 生效。
+func TestUpdate(t *testing.T) {
+	s := New(nil, slog.New(slog.DiscardHandler))
+	oldID, err := s.Add(scheduler.Task{
+		Name: "旧任务", Spec: "0 * * * * ?", Type: scheduler.TypeSchedule, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Add err=%v", err)
+	}
+
+	newID, err := s.Update(oldID, scheduler.Task{
+		Name: "新任务", Spec: "30 * * * * ?", Type: scheduler.TypeSchedule, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Update err=%v", err)
+	}
+	if newID == oldID {
+		t.Fatalf("更新后应分配新 ID，实际仍为 %s", newID)
+	}
+
+	tasks := s.List()
+	if len(tasks) != 1 {
+		t.Fatalf("更新后应恰好 1 个任务，实际 %d", len(tasks))
+	}
+	if tasks[0].Name != "新任务" {
+		t.Errorf("任务名=%q，期望 新任务", tasks[0].Name)
+	}
+	if tasks[0].ID != newID {
+		t.Errorf("任务 ID=%q，期望 %q", tasks[0].ID, newID)
+	}
+	// 旧任务应已移除
+	if err := s.Remove(oldID); err == nil {
+		t.Error("旧任务应已被移除，Remove 旧 ID 却成功")
+	}
+}
+
+// TestUpdate_NotFound 更新不存在的任务应报"任务不存在"。
+func TestUpdate_NotFound(t *testing.T) {
+	s := New(nil, slog.New(slog.DiscardHandler))
+	_, err := s.Update("task_不存在", scheduler.Task{
+		Name: "x", Spec: "0 * * * * ?", Enabled: true,
+	})
+	if err == nil {
+		t.Fatal("更新不存在的任务应报错")
+	}
+	if !strings.Contains(err.Error(), "任务不存在") {
+		t.Errorf("错误应含'任务不存在'，实际=%v", err)
+	}
+}
+
+// TestUpdate_InvalidKeepsOld 原子性回归：新任务非法时旧任务必须保持有效，
+// 修复"先 Remove 后 Add 失败即丢任务"缺陷。
+func TestUpdate_InvalidKeepsOld(t *testing.T) {
+	s := New(nil, slog.New(slog.DiscardHandler))
+	oldID, err := s.Add(scheduler.Task{
+		Name: "必须存活", Spec: "0 * * * * ?", Type: scheduler.TypeSchedule, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Add err=%v", err)
+	}
+
+	cases := []struct {
+		name string
+		task scheduler.Task
+	}{
+		{"非法cron", scheduler.Task{Name: "坏", Spec: "not-a-cron", Enabled: true}},
+		{"未启用", scheduler.Task{Name: "off", Spec: "0 * * * * ?"}},
+		{"闹钟已过期", func() scheduler.Task {
+			past := time.Now().Add(-time.Hour)
+			return scheduler.Task{Name: "过期", Type: scheduler.TypeAlarm, At: &past, Enabled: true}
+		}()},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := s.Update(oldID, tc.task); err == nil {
+				t.Fatal("非法新任务应报错")
+			}
+			// 关键断言：旧任务仍在
+			tasks := s.List()
+			if len(tasks) != 1 {
+				t.Fatalf("旧任务应保留，实际任务数=%d", len(tasks))
+			}
+			if tasks[0].ID != oldID || tasks[0].Name != "必须存活" {
+				t.Fatalf("旧任务被破坏：id=%q name=%q", tasks[0].ID, tasks[0].Name)
+			}
+		})
 	}
 }
 

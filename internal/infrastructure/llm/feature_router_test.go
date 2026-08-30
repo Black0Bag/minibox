@@ -14,7 +14,7 @@ func TestFeatureRouter_Resolve(t *testing.T) {
 
 	// 创建带功能配置的 FeatureRouter
 	models := &llm.FeatureModels{Configs: map[llm.Feature]llm.FeatureConfig{
-		llm.FeatureAgent:      {Feature: llm.FeatureAgent, Provider: "deepseek", Model: "deepseek-chat"},
+		llm.FeatureAgent:       {Feature: llm.FeatureAgent, Provider: "deepseek", Model: "deepseek-chat"},
 		llm.FeaturePrefExtract: {Feature: llm.FeaturePrefExtract, Provider: "glm", Model: "glm-4"},
 	}}
 
@@ -23,9 +23,9 @@ func TestFeatureRouter_Resolve(t *testing.T) {
 	fr := &FeatureRouter{inner: inner, models: models, logger: logger}
 
 	tests := []struct {
-		name     string
-		req      llm.Request
-		want     string // 期望的 Model 值
+		name string
+		req  llm.Request
+		want string // 期望的 Model 值
 	}{
 		{
 			name: "第1级: req.Model 已设置，直接返回",

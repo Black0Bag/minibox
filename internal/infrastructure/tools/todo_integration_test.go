@@ -39,20 +39,20 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("创建任务失败: %v", err)
 		}
-		
+
 		if len(run.TodoItems) != 1 {
 			t.Fatalf("预期1个任务，实际有 %d 个", len(run.TodoItems))
 		}
-		
+
 		item := run.TodoItems[0]
 		if item.Content != "测试任务1" {
 			t.Errorf("任务内容错误: 期望 '测试任务1'，实际 '%s'", item.Content)
 		}
-		
+
 		if item.Status != agent.TodoPending {
 			t.Errorf("任务状态错误: 期望 'pending'，实际 '%s'", item.Status)
 		}
-		
+
 		t.Logf("创建任务成功: %s", result)
 	})
 
@@ -64,16 +64,16 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("更新任务状态失败: %v", err)
 		}
-		
+
 		updatedItem := run.TodoItems[0]
 		if updatedItem.Status != agent.TodoInProgress {
 			t.Errorf("任务状态错误: 期望 'in_progress'，实际 '%s'", updatedItem.Status)
 		}
-		
+
 		if updatedItem.StartedAt.IsZero() {
 			t.Error("任务开始时间不应为空")
 		}
-		
+
 		t.Logf("更新任务状态成功: %s", result)
 	})
 
@@ -84,11 +84,11 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("列出任务失败: %v", err)
 		}
-		
+
 		if len(result) == 0 {
 			t.Error("结果不应为空")
 		}
-		
+
 		t.Logf("列出任务成功:\n%s", result)
 	})
 
@@ -99,17 +99,17 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("创建任务失败: %v", err)
 		}
-		
+
 		input = []byte(`{"content":"测试任务3"}`)
 		_, err = createTool.Invoke(ctx, input)
 		if err != nil {
 			t.Fatalf("创建任务失败: %v", err)
 		}
-		
+
 		if len(run.TodoItems) != 3 {
 			t.Fatalf("预期3个任务，实际有 %d 个", len(run.TodoItems))
 		}
-		
+
 		t.Log("创建更多任务成功")
 	})
 
@@ -121,16 +121,16 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("标记任务完成失败: %v", err)
 		}
-		
+
 		completedItem := run.TodoItems[0]
 		if completedItem.Status != agent.TodoCompleted {
 			t.Errorf("任务状态错误: 期望 'completed'，实际 '%s'", completedItem.Status)
 		}
-		
+
 		if completedItem.CompletedAt.IsZero() {
 			t.Error("任务完成时间不应为空")
 		}
-		
+
 		t.Logf("标记任务完成成功: %s", result)
 	})
 
@@ -141,7 +141,7 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("列出任务失败: %v", err)
 		}
-		
+
 		t.Logf("所有任务:\n%s", result)
 	})
 
@@ -153,11 +153,11 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("删除任务失败: %v", err)
 		}
-		
+
 		if len(run.TodoItems) != 2 {
 			t.Fatalf("预期2个任务，实际有 %d 个", len(run.TodoItems))
 		}
-		
+
 		t.Logf("删除任务成功: %s", result)
 	})
 
@@ -168,7 +168,7 @@ func TestTodoToolsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("列出任务失败: %v", err)
 		}
-		
+
 		t.Logf("最终任务状态:\n%s", result)
 	})
 }
@@ -221,11 +221,11 @@ func TestTodoManagerIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarkInProgress 失败: %v", err)
 		}
-		
+
 		if run.TodoItems[0].Status != agent.TodoInProgress {
 			t.Errorf("MarkInProgress 后状态错误: 期望 'in_progress'，实际 '%s'", run.TodoItems[0].Status)
 		}
-		
+
 		if run.TodoItems[0].StartedAt.IsZero() {
 			t.Error("MarkInProgress 后开始时间不应为空")
 		}
@@ -237,11 +237,11 @@ func TestTodoManagerIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarkCompleted 失败: %v", err)
 		}
-		
+
 		if run.TodoItems[0].Status != agent.TodoCompleted {
 			t.Errorf("MarkCompleted 后状态错误: 期望 'completed'，实际 '%s'", run.TodoItems[0].Status)
 		}
-		
+
 		if run.TodoItems[0].CompletedAt.IsZero() {
 			t.Error("MarkCompleted 后完成时间不应为空")
 		}
@@ -265,7 +265,7 @@ func TestTodoManagerIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarkInProgress 失败: %v", err)
 		}
-		
+
 		current := manager.GetCurrentInProgress()
 		if current == nil {
 			t.Fatal("GetCurrentInProgress 不应返回 nil")
