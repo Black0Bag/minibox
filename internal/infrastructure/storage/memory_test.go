@@ -301,6 +301,31 @@ func TestChunkSource(t *testing.T) {
 	}
 }
 
+// waitCompileDone 轮询等待编译作业到达终态（READY/FAILED）。
+// 不用固定 Sleep：-race 插桩会显著放慢异步编译，固定等待在 CI 上不稳定。
+func waitCompileDone(ctx context.Context, t *testing.T, compiler memory.Compiler, jobID string) *memory.CompileJob {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var last *memory.CompileJob
+	for time.Now().Before(deadline) {
+		got, err := compiler.GetJob(ctx, jobID)
+		if err != nil {
+			t.Fatalf("GetJob 失败: %v", err)
+		}
+		last = got
+		if got.Status == memory.JobReady || got.Status == memory.JobFailed {
+			return got
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	status := memory.JobStatus("")
+	if last != nil {
+		status = last.Status
+	}
+	t.Fatalf("编译作业 %s 在 10s 内未到终态，最后状态=%s", jobID, status)
+	return last
+}
+
 // TestCompilerEmbedder 验证 embedding 链路（mock embedder 写向量）。
 func TestCompilerEmbedder(t *testing.T) {
 	store, compiler, _ := newTestStore(t)
@@ -311,10 +336,12 @@ func TestCompilerEmbedder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile 失败: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
-	got, _ := compiler.GetJob(ctx, job.ID)
+
+	// 轮询等待异步编译完成：固定 Sleep 在 -race 插桩下会超时（CI 实证），
+	// 与 TestCompilerPipeline 保持同一等待方式。
+	got := waitCompileDone(ctx, t, compiler, job.ID)
 	if got.Status != memory.JobReady {
-		t.Fatalf("应 READY: %s", got.Error)
+		t.Fatalf("应 READY: status=%s err=%s", got.Status, got.Error)
 	}
 
 	// 验证向量入库（dim 应与 fakeEmbedder 返回一致，太大则拒绝——用 1024 维）
