@@ -30,6 +30,7 @@ func main() {
 	}
 }
 
+// run 启动应用（thin main：只装配和跑生命周期）。
 func run() error {
 	// 解析命令行参数
 	var (
@@ -61,7 +62,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("装配应用: %w", err)
 		}
-		defer application.Close()
+		defer func() { _ = application.Close() }()
 
 		wz := application.Wizard()
 		need, _ := wz.NeedWizard()

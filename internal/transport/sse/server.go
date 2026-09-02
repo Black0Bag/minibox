@@ -195,13 +195,13 @@ func (s *Server) replay(sessionID string, lastID int) []*transport.Envelope {
 	return out
 }
 
-// appendHistory 在锁内保存有限历史，超出窗口时丢弃最旧事件。
+// appendHistoryLocked 在锁内保存有限历史，超出窗口时丢弃最旧事件。
+// 调用方需持 s.mu。
 func (s *Server) appendHistoryLocked(sessionID string, env *transport.Envelope) {
-	history := append(s.history[sessionID], env)
-	if len(history) > defaultBufferSize {
-		history = history[len(history)-defaultBufferSize:]
+	s.history[sessionID] = append(s.history[sessionID], env)
+	if over := len(s.history[sessionID]) - defaultBufferSize; over > 0 {
+		s.history[sessionID] = s.history[sessionID][over:]
 	}
-	s.history[sessionID] = history
 }
 
 // unsubscribe 注销流。

@@ -223,7 +223,8 @@ func (c *Coordinator) generateProposal(ctx context.Context, m teamwork.Member, q
 }
 
 // Conclude 组长裁决结案（对接步骤 6）：组长汇总各轮提案出定稿，更新项目状态与信任档案。
-func (c *Coordinator) Conclude(ctx context.Context, projectID, verdict string) (*Project, error) {
+// ctx 保留在签名中以便后续接入 LLM 复核裁决（当前实现为纯内存操作）。
+func (c *Coordinator) Conclude(_ context.Context, projectID, verdict string) (*Project, error) {
 	p, ok := c.Project(projectID)
 	if !ok {
 		return nil, fmt.Errorf("项目不存在: %s", projectID)
@@ -252,6 +253,7 @@ func (c *Coordinator) Conclude(ctx context.Context, projectID, verdict string) (
 
 // RequestStaffing 人力增援审批（对接自进化：成员发现人手不足 → 上报）。
 // 委托 domain HR 三层审批；返回决策 + 预警等级。
-func (c *Coordinator) RequestStaffing(ctx context.Context, req teamwork.StaffingRequest) ([]teamwork.StaffingDecision, teamwork.StaffingAlarm, error) {
+// ctx 保留在签名中以便后续接入需要 IO 的用户审批推送（当前为纯内存判定）。
+func (c *Coordinator) RequestStaffing(_ context.Context, req teamwork.StaffingRequest) ([]teamwork.StaffingDecision, teamwork.StaffingAlarm, error) {
 	return c.sched.HR.Review(req)
 }

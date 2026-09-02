@@ -73,24 +73,37 @@ func (pd ProblemDetail) WithMember(key string, value any) ProblemDetail {
 
 // --- 常用错误构造器 ---
 
+// NotFound 构造 404 资源不存在。
 func NotFound(detail string) ProblemDetail {
 	return New(http.StatusNotFound, "not_found", "资源不存在", detail)
 }
+
+// BadRequest 构造 400 请求参数错误。
 func BadRequest(detail string) ProblemDetail {
 	return New(http.StatusBadRequest, "bad_request", "请求参数错误", detail)
 }
+
+// Internal 构造 500 内部错误。
 func Internal(detail string) ProblemDetail {
 	return New(http.StatusInternalServerError, "internal_error", "内部错误", detail)
 }
+
+// ServiceUnavailable 构造 503 服务不可用（依赖未就绪时用）。
 func ServiceUnavailable(detail string) ProblemDetail {
 	return New(http.StatusServiceUnavailable, "service_unavailable", "服务不可用", detail)
 }
+
+// Unauthorized 构造 401 未认证（调用方需自行补 WWW-Authenticate 挑战头）。
 func Unauthorized(detail string) ProblemDetail {
 	return New(http.StatusUnauthorized, "unauthorized", "未认证", detail)
 }
+
+// Forbidden 构造 403 禁止访问（已认证但权限不足）。
 func Forbidden(detail string) ProblemDetail {
 	return New(http.StatusForbidden, "forbidden", "禁止访问", detail)
 }
+
+// Conflict 构造 409 资源冲突。
 func Conflict(detail string) ProblemDetail {
 	return New(http.StatusConflict, "conflict", "资源冲突", detail)
 }

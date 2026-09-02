@@ -76,8 +76,9 @@ func (s *Server) RegisterDefaultHandlers() {
 }
 
 // handleDeviceProxy 设备代理（前缀路由：所有 device.* 方法走这里）。
-// 实际设备操作由 device.Hub 代理转发到真实设备。
-func (s *Server) handleDeviceProxy(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+// 实际设备操作由 device.Hub 代理转发到真实设备；组合根会用自己的
+// handler 覆盖本占位实现（app.handleDeviceMessage）。
+func (s *Server) handleDeviceProxy(_ context.Context, _ *Client, _ json.RawMessage) (any, error) {
 	return map[string]any{
 		"ok":      true,
 		"message": "device proxy: awaiting real device implementation",
@@ -85,7 +86,8 @@ func (s *Server) handleDeviceProxy(ctx context.Context, c *Client, params json.R
 }
 
 // handleBrowserProxy 浏览器代理（前缀路由：所有 browser.* 方法走这里）。
-func (s *Server) handleBrowserProxy(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+// 浏览器能力按设计放在前端（docs/browser-frontend.md），后端仅保留占位。
+func (s *Server) handleBrowserProxy(_ context.Context, _ *Client, _ json.RawMessage) (any, error) {
 	return map[string]any{
 		"ok":      true,
 		"message": "browser proxy: awaiting real browser implementation",
@@ -93,7 +95,7 @@ func (s *Server) handleBrowserProxy(ctx context.Context, c *Client, params json.
 }
 
 // handlePeerDiscover 发现对等设备。
-func (s *Server) handlePeerDiscover(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+func (s *Server) handlePeerDiscover(_ context.Context, _ *Client, _ json.RawMessage) (any, error) {
 	return map[string]any{
 		"peers":   []string{},
 		"message": "no peers discovered",
@@ -101,7 +103,7 @@ func (s *Server) handlePeerDiscover(ctx context.Context, c *Client, params json.
 }
 
 // handlePeerRelay 中继消息到对等设备。
-func (s *Server) handlePeerRelay(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+func (s *Server) handlePeerRelay(_ context.Context, _ *Client, params json.RawMessage) (any, error) {
 	var p struct {
 		PeerID string `json:"peer_id"`
 		Data   any    `json:"data"`
@@ -116,7 +118,7 @@ func (s *Server) handlePeerRelay(ctx context.Context, c *Client, params json.Raw
 }
 
 // handleEventAck 确认收到事件推送。
-func (s *Server) handleEventAck(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+func (s *Server) handleEventAck(_ context.Context, _ *Client, params json.RawMessage) (any, error) {
 	var p struct {
 		EventID string `json:"event_id"`
 	}
@@ -127,17 +129,17 @@ func (s *Server) handleEventAck(ctx context.Context, c *Client, params json.RawM
 }
 
 // handleSystemInfo 返回系统信息。
-func (s *Server) handleSystemInfo(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+func (s *Server) handleSystemInfo(_ context.Context, c *Client, _ json.RawMessage) (any, error) {
 	return map[string]any{
 		"version":   "1.0",
 		"protocol":  "1.0",
-		"client_id": c.ID,
+		"client_id": c.ID(),
 		"methods":   []string{"device.*", "browser.*", "peer.*", "event.*", "system.*", "heartbeat.*"},
 	}, nil
 }
 
 // handleSystemStats 返回系统统计信息。
-func (s *Server) handleSystemStats(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+func (s *Server) handleSystemStats(_ context.Context, _ *Client, _ json.RawMessage) (any, error) {
 	s.mu.RLock()
 	clientCount := len(s.clients)
 	s.mu.RUnlock()
@@ -148,7 +150,7 @@ func (s *Server) handleSystemStats(ctx context.Context, c *Client, params json.R
 }
 
 // handleSystemLog 推送系统日志（客户端订阅后服务端推送）。
-func (s *Server) handleSystemLog(ctx context.Context, c *Client, params json.RawMessage) (any, error) {
+func (s *Server) handleSystemLog(_ context.Context, _ *Client, _ json.RawMessage) (any, error) {
 	return map[string]any{
 		"ok":      true,
 		"message": "log subscription acknowledged",

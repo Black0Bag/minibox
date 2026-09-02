@@ -83,7 +83,7 @@ func NewTodoCreate() tools.Tool {
 			RiskTier:         "low",
 			RequiresApproval: false,
 		},
-		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
+		fn: func(_ context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
 			content, err := strArg(args, "content")
 			if err != nil {
 				return "", err
@@ -128,7 +128,7 @@ func NewTodoUpdate() tools.Tool {
 			RiskTier:         "low",
 			RequiresApproval: false,
 		},
-		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
+		fn: func(_ context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
 			id, err := strArg(args, "id")
 			if err != nil {
 				return "", err
@@ -192,7 +192,7 @@ func NewTodoList() tools.Tool {
 			RiskTier:         "low",
 			RequiresApproval: false,
 		},
-		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
+		fn: func(_ context.Context, run *agent.Run, _ map[string]json.RawMessage) (string, error) {
 			if len(run.TodoItems) == 0 {
 				return "当前没有待办任务", nil
 			}
@@ -209,7 +209,7 @@ func NewTodoList() tools.Tool {
 					statusEmoji = "✅"
 				}
 
-				sb.WriteString(fmt.Sprintf("%s [%s] %s\n", statusEmoji, item.ID[:8], item.Content))
+				fmt.Fprintf(&sb, "%s [%s] %s\n", statusEmoji, item.ID[:8], item.Content)
 			}
 
 			return sb.String(), nil
@@ -236,7 +236,7 @@ func NewTodoDelete() tools.Tool {
 			RiskTier:         "low",
 			RequiresApproval: false,
 		},
-		fn: func(ctx context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
+		fn: func(_ context.Context, run *agent.Run, args map[string]json.RawMessage) (string, error) {
 			id, err := strArg(args, "id")
 			if err != nil {
 				return "", err

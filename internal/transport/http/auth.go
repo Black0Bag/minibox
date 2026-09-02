@@ -1,4 +1,4 @@
-// 认证中间件（Bearer Token）。
+// Package http 提供 REST 传输层的认证中间件（Bearer Token）。
 //
 // 规范依据（2026-09-02 互联网校准）：
 //   - RFC 9110 §11.1：auth-scheme 是 case-insensitive token，

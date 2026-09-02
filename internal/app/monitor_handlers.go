@@ -1,5 +1,7 @@
-// handleMonitor 端点实现：性能监控 REST API（Phase 3.5）。
 package app
+
+// 性能监控 REST API（Phase 3.5）：指标端点 + 内存历史环形缓冲。
+// 包说明见 app.go。
 
 import (
 	"net/http"

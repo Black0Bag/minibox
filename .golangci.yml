@@ -22,3 +22,11 @@ linters:
       # 保留编译期接口断言惯用法 `var _ Interface = x`
       - linters: [staticcheck]
         text: "QF1011"
+      # 测试代码中 defer Close()/Release() 的返回值无处理价值：
+      # 断言写 `_ =` 只增噪音，测试失败本身就是信号。
+      - linters: [errcheck]
+        path: _test\.go
+      # 测试函数签名固定（*testing.T），未使用 t 参数不能改名。
+      - linters: [revive]
+        path: _test\.go
+        text: "unused-parameter"

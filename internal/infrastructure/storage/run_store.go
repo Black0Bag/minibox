@@ -218,7 +218,7 @@ func (s *RunStore) LoadRecentSessions(limit int) (map[string][]SessionMessage, e
 	if err != nil {
 		return nil, fmt.Errorf("加载最近会话失败: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[string][]SessionMessage)
 	for rows.Next() {

@@ -44,13 +44,17 @@ type embeddingResp struct {
 	} `json:"data"`
 }
 
+// EmbeddingType 向量用途（asymmetric 模型需区分文档与查询侧）。
 type EmbeddingType string
 
 const (
+	// EmbedTypePassage 文档/段落侧向量（入库索引用）。
 	EmbedTypePassage EmbeddingType = "passage"
-	EmbedTypeQuery   EmbeddingType = "query"
+	// EmbedTypeQuery 查询侧向量（检索用）。
+	EmbedTypeQuery EmbeddingType = "query"
 )
 
+// Embed 生成单条文本的 passage 向量。
 func (c *EmbeddingClient) Embed(ctx context.Context, model, text string) ([]float32, error) {
 	vecs, err := c.EmbedTyped(ctx, model, []string{text}, EmbedTypePassage)
 	if err != nil {
@@ -61,9 +65,13 @@ func (c *EmbeddingClient) Embed(ctx context.Context, model, text string) ([]floa
 	}
 	return vecs[0], nil
 }
+
+// EmbedBatch 批量生成 passage 向量（知识库入库用）。
 func (c *EmbeddingClient) EmbedBatch(ctx context.Context, model string, texts []string) ([][]float32, error) {
 	return c.EmbedTyped(ctx, model, texts, EmbedTypePassage)
 }
+
+// EmbedQuery 生成查询侧向量（检索用，与入库侧模式不同）。
 func (c *EmbeddingClient) EmbedQuery(ctx context.Context, model, text string) ([]float32, error) {
 	vecs, err := c.EmbedTyped(ctx, model, []string{text}, EmbedTypeQuery)
 	if err != nil {
@@ -130,15 +138,17 @@ func (c *EmbeddingClient) EmbedTyped(ctx context.Context, model string, texts []
 			lastErr = fmt.Errorf("embedding 请求失败: %w", doErr)
 		} else {
 			responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-			resp.Body.Close()
-			if readErr != nil {
+			_ = resp.Body.Close()
+			switch {
+			case readErr != nil:
 				lastErr = fmt.Errorf("读取 embedding 响应失败: %w", readErr)
-			} else if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			case resp.StatusCode < 200 || resp.StatusCode >= 300:
 				lastErr = fmt.Errorf("embedding API: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+				// 4xx（除 429）为客户端错误，重试无意义，直接返回。
 				if resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
 					return nil, lastErr
 				}
-			} else {
+			default:
 				var result embeddingResp
 				if err := json.Unmarshal(responseBody, &result); err != nil {
 					return nil, fmt.Errorf("解析 embedding 响应失败: %w", err)
