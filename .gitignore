@@ -22,5 +22,10 @@ data/
 # 构建和测试生成物
 /bin/
 /build/
+/minibox
+/minibox.exe
 test-tmp/
 /tmp/
+
+# 代码库扫描产物（acquire-codebase-knowledge 生成，随时可重跑）
+docs/codebase/.codebase-scan.txt

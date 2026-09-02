@@ -13,33 +13,37 @@ import (
 //   - 产出未过质检连续 3 轮
 //   - 整体超时 2h
 //   - 同团队 ≥2 成员信任降至 L2（警告期）以下
+//
+// REST DTO：字段名为 lower_snake_case（rules.md）。
+// timeout_ns 是 time.Duration 的纳秒整数（Go 默认序列化），前端展示需自行换算。
 type CircuitBreaker struct {
 	mu sync.Mutex
 
 	// ConsecutiveFailures 连续失败计数。
-	ConsecutiveFailures int
+	ConsecutiveFailures int `json:"consecutive_failures"`
 	// InfiniteLoops 死循环计数。
-	InfiniteLoops int
+	InfiniteLoops int `json:"infinite_loops"`
 	// QAFailRounds 质检未过连续轮次。
-	QAFailRounds int
+	QAFailRounds int `json:"qa_fail_rounds"`
 
 	// StartedAt 任务开始时间（超时判断）。
-	StartedAt time.Time
-	// Timeout 整体超时（默认 2h）。
-	Timeout time.Duration
+	StartedAt time.Time `json:"started_at"`
+	// Timeout 整体超时（默认 2h），JSON 中为纳秒整数。
+	Timeout time.Duration `json:"timeout_ns"`
 
 	// DemotedMembers 已降级成员数（降级至 L2 以下）。
-	DemotedMembers int
+	DemotedMembers int `json:"demoted_members"`
 
 	// Tripped 是否已熔断。
-	Tripped bool
+	Tripped bool `json:"tripped"`
 	// TripReason 熔断原因。
-	TripReason string
+	TripReason string `json:"trip_reason,omitempty"`
 }
 
 // CircuitConfig 熔断器配置。
 type CircuitConfig struct {
-	Timeout time.Duration // 整体超时（0=默认 2h）
+	// Timeout 整体超时（0=默认 2h），JSON 中为纳秒整数。
+	Timeout time.Duration `json:"timeout_ns,omitempty"`
 }
 
 // NewCircuitBreaker 创建熔断器。

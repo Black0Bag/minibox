@@ -16,32 +16,36 @@ import (
 //   - 4d 分歧组长裁决（涉及加人/危险操作才上报用户）
 //   - 4e 依赖检测并行/串行
 //   - 4f 问题锁：用户原始需求是不可变基准，每轮结束对照防偏移
+//
+// REST DTO：字段名为 lower_snake_case（rules.md），Android DTO 直接对齐。
+// 注意 proposals 的 JSON key 是轮次数字的字符串形式（Go 的整数键 map 序列化为
+// {"1":[...],"2":[...]}，实测 encoding/json 行为），前端需按字符串键解析。
 type Discussion struct {
 	mu sync.Mutex
 
 	// Question 问题锁：用户原始需求（不可变基准）。
-	Question string
+	Question string `json:"question"`
 
 	// LeadID 组长 ID。
-	LeadID string
+	LeadID string `json:"lead_id"`
 
 	// Round 当前轮次。
-	Round int
+	Round int `json:"round"`
 
 	// MaxRounds 轮次上限（默认 5）。
-	MaxRounds int
+	MaxRounds int `json:"max_rounds"`
 
-	// Proposals 各轮提案（key=轮次）。
-	Proposals map[int][]Proposal
+	// Proposals 各轮提案（key=轮次，JSON 中为字符串形式的轮次）。
+	Proposals map[int][]Proposal `json:"proposals"`
 
 	// Verdict 组长最终裁决（定稿后非空）。
-	Verdict string
+	Verdict string `json:"verdict,omitempty"`
 
 	// Done 是否已结束。
-	Done bool
+	Done bool `json:"done"`
 
 	// StartedAt 开始时间。
-	StartedAt time.Time
+	StartedAt time.Time `json:"started_at"`
 }
 
 // Proposal 成员提案。
@@ -184,11 +188,13 @@ type DispatchPlan struct {
 }
 
 // TaskDependency 任务依赖声明。
+// JSON tag 已冻结为 lower_snake_case（rules.md：REST JSON 字段使用
+// lower_snake_case），供 Android DTO 直接对齐；不得改名。
 type TaskDependency struct {
 	// ID 任务 ID。
-	ID string
+	ID string `json:"id"`
 	// DependsOn 依赖的任务 ID 列表（空=无依赖）。
-	DependsOn []string
+	DependsOn []string `json:"depends_on,omitempty"`
 }
 
 // PlanDispatch 依赖检测调度（轻量 DAG，不引完整 DAG 库）。

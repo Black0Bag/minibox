@@ -122,6 +122,37 @@ func TestPlanDispatchMissingDep(t *testing.T) {
 	}
 }
 
+// TestTaskDependencyJSON契约 冻结 TaskDependency 的 REST JSON 契约。
+// Android DTO 直接依赖这两个字段名；改名即破坏前端反序列化。
+// rules.md：REST JSON 字段使用 lower_snake_case。
+func TestTaskDependencyJSON契约(t *testing.T) {
+	raw, err := json.Marshal(TaskDependency{ID: "task_1", DependsOn: []string{"task_0"}})
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	if got, want := string(raw), `{"id":"task_1","depends_on":["task_0"]}`; got != want {
+		t.Errorf("序列化结果=%s, 期望 %s", got, want)
+	}
+
+	// 无依赖时 depends_on 省略（omitempty），前端按缺省视为空依赖。
+	raw, err = json.Marshal(TaskDependency{ID: "task_2"})
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	if got, want := string(raw), `{"id":"task_2"}`; got != want {
+		t.Errorf("无依赖序列化=%s, 期望 %s", got, want)
+	}
+
+	// 反序列化对齐：前端发 snake_case 必须能被后端接收。
+	var back TaskDependency
+	if err := json.Unmarshal([]byte(`{"id":"t","depends_on":["a","b"]}`), &back); err != nil {
+		t.Fatalf("反序列化失败: %v", err)
+	}
+	if back.ID != "t" || len(back.DependsOn) != 2 {
+		t.Errorf("反序列化结果=%+v", back)
+	}
+}
+
 func TestAlarmFor(t *testing.T) {
 	cases := []struct {
 		count int

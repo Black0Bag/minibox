@@ -26,13 +26,12 @@ const (
 )
 
 // Stream 单个 SSE 订阅流（一个 client）。
+// 续传游标由 Server 统一维护（Server.nextSeq + 订阅时计算的 startSeq），
+// Stream 自身不再持有 seq 状态，避免两处游标不一致。
 type Stream struct {
-	// 发送队列（缓冲窗口，满了阻塞背压）
+	// 发送队列（缓冲窗口，满了走续传历史，不阻塞 Publish）
 	ch chan *transport.Envelope
-	// 已发送的 seq 游标（供 Last-Event-ID 续传），用锁保护
-	mu      sync.Mutex
-	lastSeq int
-	// 关闭信号
+	// 关闭信号（被同 session 新订阅替换或注销时关闭）
 	done chan struct{}
 }
 
@@ -153,9 +152,8 @@ type replaySubscription struct {
 func (s *Server) subscribeWithReplay(sessionID string, lastID int) replaySubscription {
 	startSeq := lastID + 1
 	st := &Stream{
-		ch:      make(chan *transport.Envelope, defaultBufferSize),
-		lastSeq: lastID,
-		done:    make(chan struct{}),
+		ch:   make(chan *transport.Envelope, defaultBufferSize),
+		done: make(chan struct{}),
 	}
 
 	s.mu.Lock()

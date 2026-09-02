@@ -39,23 +39,24 @@ type Coordinator struct {
 }
 
 // Project 单个项目模式会话。
+// REST DTO：字段名为 lower_snake_case（rules.md），Android DTO 直接对齐。
 type Project struct {
 	// ID 项目会话 ID（sessionID 同源，全局唯一）。
-	ID string
+	ID string `json:"id"`
 	// Question 用户原始需求（问题锁，不可变基准）。
-	Question string
+	Question string `json:"question"`
 	// Team 已选团队。
-	Team teamwork.Team
+	Team teamwork.Team `json:"team"`
 	// Members 已实例化成员（组长 + 成员）。
-	Members []teamwork.Member
-	// Discussion 当前讨论（可为 nil，未进入讨论阶段）。
-	Discussion *teamwork.Discussion
+	Members []teamwork.Member `json:"members"`
+	// Discussion 当前讨论（可为 nil，未进入讨论阶段时字段省略）。
+	Discussion *teamwork.Discussion `json:"discussion,omitempty"`
 	// Verdict 组长最终裁决（定稿后非空）。
-	Verdict string
+	Verdict string `json:"verdict,omitempty"`
 	// Status 阶段状态：triage→confirmed→discussing→planning→executing→done。
-	Status string
+	Status string `json:"status"`
 	// CreatedAt 创建时间。
-	CreatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // NewCoordinator 创建编排中枢。

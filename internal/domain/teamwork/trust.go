@@ -32,8 +32,9 @@ const (
 
 // Profile 信任档案（7 维评分）。
 // 设计：不靠团队自评（业界证实 AI 不会承认无能），靠独立外部监控客观打分。
+// REST DTO：字段名为 lower_snake_case（rules.md）。
 type Profile struct {
-	mu sync.Mutex `json:"-"`
+	mu sync.Mutex
 
 	MemberID string `json:"member_id"`
 

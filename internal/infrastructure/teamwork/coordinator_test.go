@@ -79,7 +79,8 @@ func TestRunDiscussion(t *testing.T) {
 
 func TestConclude(t *testing.T) {
 	c := newTestCoordinator()
-	p, _ := c.StartProject(context.Background(), "sess-3", "写一份市场报告", "research", nil)
+	// StartProject 的返回值在此不使用（下面用 Conclude 的返回值断言）。
+	_, _ = c.StartProject(context.Background(), "sess-3", "写一份市场报告", "research", nil)
 	_, _ = c.RunDiscussion(context.Background(), "sess-3", "")
 
 	p, err := c.Conclude(context.Background(), "sess-3", "采用研究主管框架定稿")

@@ -93,17 +93,18 @@ func AlarmFor(count int) StaffingAlarm {
 
 // HRAssistant HR 审批助手（三层审批链路）。
 // 设计：成员→组长→HR→用户（专业性太强或超标才上报）。
+// REST DTO：字段名为 lower_snake_case（rules.md）。
 type HRAssistant struct {
 	mu sync.Mutex
 
-	// StaffedThisTask 当前任务已增派人数（预警计数）。
-	StaffedThisTask map[string]int
+	// StaffedThisTask 当前任务已增派人数（预警计数，key=task_id）。
+	StaffedThisTask map[string]int `json:"staffed_this_task"`
 
 	// RoleCardLibrary 模板库（角色卡 ID 索引）。
-	RoleCardLibrary map[string]RoleCard
+	RoleCardLibrary map[string]RoleCard `json:"role_card_library"`
 
 	// Decisions 审批记录。
-	Decisions []StaffingDecision
+	Decisions []StaffingDecision `json:"decisions"`
 }
 
 // NewHRAssistant 创建 HR 助手。

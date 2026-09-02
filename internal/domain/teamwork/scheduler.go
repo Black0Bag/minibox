@@ -8,32 +8,38 @@ import (
 )
 
 // DispatchOutcome 调度结果。
+// REST DTO：字段名为 lower_snake_case（rules.md）。
 type DispatchOutcome struct {
 	// Triage 前台分诊推荐。
-	Triage *Triage
+	Triage *Triage `json:"triage,omitempty"`
 	// Plan 依赖检测调度计划（ModeProject 时非空）。
-	Plan *DispatchPlan
+	Plan *DispatchPlan `json:"plan,omitempty"`
 	// Discussion 讨论（有组长时）。
-	Discussion *Discussion
+	Discussion *Discussion `json:"discussion,omitempty"`
 }
 
 // Triage 前台分诊结果（方案 B：推荐后确认）。
 // 需求明确 → 推荐 1 团队 + 理由；需求模糊 → 2-3 备选。
+// REST DTO：字段名为 lower_snake_case（rules.md）。
 type Triage struct {
 	// Recommended 推荐团队（需求明确时单数，模糊时第一个为主推）。
-	Recommended []TeamRecommendation
+	Recommended []TeamRecommendation `json:"recommended"`
 	// NeedClarify 是否需要用户澄清（需求模糊）。
-	NeedClarify bool
+	NeedClarify bool `json:"need_clarify"`
 }
 
 // TeamRecommendation 团队推荐。
 type TeamRecommendation struct {
-	Team   *Team
-	Reason string
+	// Team 推荐的团队。
+	Team *Team `json:"team"`
+	// Reason 推荐理由。
+	Reason string `json:"reason"`
 }
 
 // Scheduler 团队调度中枢。
 // 职责：前台分诊（只分诊不干活）、触发讨论协议、依赖检测、串联 HR 与熔断。
+// 注意：本类型是运行时组件而非 DTO，不通过 REST 直接返回（REST 只返回
+// Scheduler().Catalog.All() 等具体数据），因此不加 json tag。
 type Scheduler struct {
 	mu sync.Mutex
 
