@@ -26,7 +26,8 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 
 func TestHandleSystemInfo(t *testing.T) {
 	s := New(nil)
-	c := &Client{ID: "test-client"}
+	c := &Client{}
+	c.setHandshake(true, "test-client", "test-client")
 	result, err := s.handleSystemInfo(context.Background(), c, nil)
 	if err != nil {
 		t.Fatalf("handleSystemInfo failed: %v", err)

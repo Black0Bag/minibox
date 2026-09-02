@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,9 +24,12 @@ import (
 // Server REST 传输层服务器。
 // 组合根注入依赖，启动后监听 config.Server。
 type Server struct {
-	cfg     config.ServerConfig
-	logger  *slog.Logger
-	router  chi.Router
+	cfg    config.ServerConfig
+	logger *slog.Logger
+	router chi.Router
+	// srvMu 保护 httpSrv：Start 在独立 goroutine 中赋值，
+	// Shutdown 与测试可能从其他 goroutine 读取（CI race job 实证）。
+	srvMu   sync.RWMutex
 	httpSrv *http.Server
 	// tools 工具注册表（/tools 端点用）
 	toolReg   *tools.Registry
@@ -98,7 +102,7 @@ func (s *Server) Start() error {
 	if readHeaderTimeout <= 0 {
 		readHeaderTimeout = 5 * time.Second
 	}
-	s.httpSrv = &http.Server{
+	srv := &http.Server{
 		Addr:              addr,
 		Handler:           s,
 		ReadTimeout:       s.cfg.ReadTimeout,
@@ -106,20 +110,31 @@ func (s *Server) Start() error {
 		WriteTimeout:      s.cfg.WriteTimeout,
 		IdleTimeout:       s.cfg.IdleTimeout,
 	}
+	s.srvMu.Lock()
+	s.httpSrv = srv
+	s.srvMu.Unlock()
 
 	s.logger.Info("REST 服务启动", "addr", addr)
-	if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("REST 服务监听失败: %w", err)
 	}
 	return nil
 }
 
-// Shutdown 优雅关闭 HTTP 服务。
+// Shutdown 优雅关闭 HTTP 服务。未启动时直接返回 nil。
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.httpSrv == nil {
+	srv := s.server()
+	if srv == nil {
 		return nil
 	}
-	return s.httpSrv.Shutdown(ctx)
+	return srv.Shutdown(ctx)
+}
+
+// server 返回底层 http.Server（并发安全）；Start 未执行完时返回 nil。
+func (s *Server) server() *http.Server {
+	s.srvMu.RLock()
+	defer s.srvMu.RUnlock()
+	return s.httpSrv
 }
 
 // respondError 写 RFC 9457（原 7807）Problem Details 错误响应。

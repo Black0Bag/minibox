@@ -56,11 +56,18 @@ type rpcError struct {
 }
 
 // Client 已连接客户端（设备/前端）。
+//
+// 并发约束：连接的读循环（Server.Handler）与通知处理 goroutine
+// （dispatch 对无 id 请求走 go func）可能同时访问同一 Client，
+// 因此 ID / Name / Handshake / Data 一律通过访问方法读写，由 metaMu 保护。
+// 直接读写这些字段是 data race（CI race job 实证）。
 type Client struct {
-	ID        string
-	Name      string
-	Handshake bool
-	Data      any // 附加数据（设备信息等）
+	// metaMu 保护握手状态与连接元数据（id/name/data）。
+	metaMu    sync.RWMutex
+	id        string
+	name      string
+	handshake bool
+	data      any // 附加数据（设备信息等）
 
 	conn *websocket.Conn
 
@@ -70,6 +77,52 @@ type Client struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]chan rpcReply
+}
+
+// ID 返回握手时上报的客户端 ID。
+func (c *Client) ID() string {
+	c.metaMu.RLock()
+	defer c.metaMu.RUnlock()
+	return c.id
+}
+
+// Name 返回客户端名称（当前与 ID 同源）。
+func (c *Client) Name() string {
+	c.metaMu.RLock()
+	defer c.metaMu.RUnlock()
+	return c.name
+}
+
+// Handshaked 返回是否已完成 connect 握手。
+func (c *Client) Handshaked() bool {
+	c.metaMu.RLock()
+	defer c.metaMu.RUnlock()
+	return c.handshake
+}
+
+// Data 返回附加数据（设备 Hub 用来挂载 *device.Device）。
+func (c *Client) Data() any {
+	c.metaMu.RLock()
+	defer c.metaMu.RUnlock()
+	return c.data
+}
+
+// SetData 设置附加数据（设备注册后由组合根调用）。
+func (c *Client) SetData(v any) {
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	c.data = v
+}
+
+// setHandshake 记录握手结果与连接元数据（仅本包内部使用）。
+func (c *Client) setHandshake(ok bool, id, name string) {
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	c.handshake = ok
+	if ok {
+		c.id = id
+		c.name = name
+	}
 }
 
 type rpcReply struct {
@@ -297,7 +350,7 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, cli *Client
 	}
 
 	// 其他 method 需先握手（QC3）
-	if !cli.Handshake {
+	if !cli.Handshaked() {
 		s.replyError(ctx, conn, cli, req, codeHandshakeRequired, "handshake_required", nil)
 		return
 	}
@@ -362,15 +415,13 @@ func (s *Server) handleConnect(ctx context.Context, conn *websocket.Conn, cli *C
 		s.replyError(ctx, conn, cli, req, codeAuthFailed, "invalid credential", nil)
 		return
 	}
-	cli.Handshake = true
-	cli.ID = params.Client
-	cli.Name = params.Client
+	cli.setHandshake(true, params.Client, params.Client)
 	s.reply(ctx, conn, cli, req, map[string]any{"ok": true, "protocol": "1.0"})
 }
 
 // handleDisconnect 断开。
 func (s *Server) handleDisconnect(ctx context.Context, conn *websocket.Conn, cli *Client, req request) {
-	cli.Handshake = false
+	cli.setHandshake(false, "", "")
 	s.reply(ctx, conn, cli, req, map[string]any{"ok": true})
 	_ = conn.Close(websocket.StatusNormalClosure, "bye")
 }
@@ -410,7 +461,7 @@ func (s *Server) Broadcast(ctx context.Context, typ string, payload any) {
 	s.mu.RLock()
 	clients := make([]*Client, 0, len(s.clients))
 	for _, cli := range s.clients {
-		if cli.Handshake {
+		if cli.Handshaked() {
 			clients = append(clients, cli)
 		}
 	}

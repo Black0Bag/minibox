@@ -134,15 +134,18 @@ func TestUnknownMethod(t *testing.T) {
 }
 
 // TestPrefixRoute 前缀路由：注册 device 处理 device.*。
+// 通知（无 id）由 dispatch 交给独立 goroutine 执行，因此结果必须通过 channel
+// 交接，不能用普通变量 + Sleep（后者与测试主 goroutine 构成 data race，
+// CI race job 实证）。
 func TestPrefixRoute(t *testing.T) {
 	srv := New(slog.New(slog.DiscardHandler))
-	var called string
+	called := make(chan string, 1)
 	srv.Handle("device", func(_ context.Context, _ *Client, params json.RawMessage) (any, error) {
 		var p struct {
 			Sub string `json:"sub"`
 		}
 		_ = json.Unmarshal(params, &p)
-		called = p.Sub
+		called <- p.Sub
 		return nil, nil
 	})
 	conn, _ := newTestWSClient(t, srv)
@@ -156,10 +159,14 @@ func TestPrefixRoute(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// 等待通知处理
-	time.Sleep(50 * time.Millisecond)
-	if called != "capture" {
-		t.Errorf("前缀路由未触发: called=%q, 期望 capture", called)
+
+	select {
+	case got := <-called:
+		if got != "capture" {
+			t.Errorf("前缀路由参数错误: called=%q, 期望 capture", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("前缀路由未触发：2s 内未收到通知回调")
 	}
 }
 

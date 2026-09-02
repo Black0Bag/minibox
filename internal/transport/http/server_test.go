@@ -136,7 +136,7 @@ func TestReadHeaderTimeoutConfigured(t *testing.T) {
 			cfg.Port = 0
 			srv := New(cfg, slog.New(slog.DiscardHandler), nil, "")
 
-			// Start 阻塞监听，用 goroutine 启动后立即读取已构造的 httpSrv
+			// Start 阻塞监听，用 goroutine 启动后通过并发安全的 server() 读取
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
@@ -147,18 +147,23 @@ func TestReadHeaderTimeoutConfigured(t *testing.T) {
 				<-done
 			})
 
-			// 等待 httpSrv 构造完成
+			// 等待 httpSrv 构造完成（server() 内部持锁，避免与 Start 的写入竞态）
+			var httpSrv *http.Server
 			deadline := time.Now().Add(2 * time.Second)
-			for srv.httpSrv == nil && time.Now().Before(deadline) {
+			for time.Now().Before(deadline) {
+				if httpSrv = srv.server(); httpSrv != nil {
+					break
+				}
 				time.Sleep(5 * time.Millisecond)
 			}
-			if srv.httpSrv == nil {
+			if httpSrv == nil {
 				t.Fatal("httpSrv 未构造，Start 可能未执行")
 			}
-			if got := srv.httpSrv.ReadHeaderTimeout; got != tc.want {
+			// http.Server 字段在 Start 中一次性设定后不再修改，可安全读取。
+			if got := httpSrv.ReadHeaderTimeout; got != tc.want {
 				t.Errorf("ReadHeaderTimeout=%v, 期望 %v", got, tc.want)
 			}
-			if srv.httpSrv.ReadHeaderTimeout <= 0 {
+			if httpSrv.ReadHeaderTimeout <= 0 {
 				t.Error("ReadHeaderTimeout 必须为正值（Slowloris 防护）")
 			}
 		})

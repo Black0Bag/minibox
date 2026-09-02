@@ -47,12 +47,12 @@ func (a *App) handleDeviceConnect(ctx context.Context, c *wstransport.Client, pa
 	if err != nil {
 		return nil, err
 	}
-	c.Data = dev
+	c.SetData(dev)
 	return map[string]any{"ok": true, "device_id": dev.ID}, nil
 }
 
 func (a *App) handleDeviceDisconnect(_ context.Context, c *wstransport.Client) (any, error) {
-	if dev, ok := c.Data.(*device.Device); ok {
+	if dev, ok := c.Data().(*device.Device); ok {
 		a.hub.HandleDisconnect(dev.ID)
 	}
 	return map[string]any{"ok": true}, nil
@@ -74,7 +74,7 @@ func (a *App) handleDeviceHello(ctx context.Context, c *wstransport.Client, para
 	if err != nil {
 		return nil, err
 	}
-	c.Data = dev
+	c.SetData(dev)
 	return map[string]any{"ok": true, "device_id": dev.ID}, nil
 }
 
