@@ -41,15 +41,35 @@ app/
 
 ### REST
 
-所有成功业务响应都在统一 Envelope 的 `data` 中；不要只根据 HTTP 200 判断业务成功。错误响应应读取 `type/title/status/detail/instance`。
+所有成功业务响应都在统一 Envelope 的 `data` 中；不要只根据 HTTP 200 判断业务成功。
+
+错误响应统一为 `application/problem+json`，顶层字段
+`type/title/status/detail/instance`。**认证 401、路由 404、方法 405 与业务错误
+格式完全一致**（2026-09-02 统一），前端只需一个错误解析器。
+
+`type` 全集见 [`api.md`](api.md) 的「通用响应 / 错误」章节。
+
+### 认证
+
+除 `/health`、`/ready`、`/device/ws` 外全部 REST 端点需要
+`Authorization: Bearer <token>`；Token 由后端首启生成于 `data/auth.token`。
+
+- scheme 大小写不敏感（`Bearer`/`bearer` 均可）
+- 401 携带 `WWW-Authenticate: Bearer realm="minibox"`，
+  凭据无效时追加 `error="invalid_token"`
+- **SSE 流也需要该请求头**，见下方 SSE 小节
 
 ### SSE
 
 - URL：`GET /api/v1/stream?session_id=<id>`。
-- 请求头：重连时发送 `Last-Event-ID`。
+- **请求头必须包含 `Authorization: Bearer <token>`**；重连时同时发送 `Last-Event-ID`。
+- 客户端选型：Android 用 OkHttp + `okhttp-sse`（支持自定义请求头）；
+  浏览器原生 `EventSource` 不能设请求头，Web 端需另行设计认证方式。
 - 事件块包含 `id`、`event`、`data`。
 - `data` 是 JSON 编码的 Envelope；使用 `seq` 做顺序检查和去重。
 - 网络断开时使用退避重连，不要并行创建同一 session 的多个订阅。
+- 收到 401 时停止重连并上报凭据错误，不要无限重试。
+- 完整事件序列（含审批分支）见 [`sse.md`](sse.md)。
 
 ### WebSocket
 
@@ -67,7 +87,13 @@ app/
 - 设备：在线、离线、能力不完整、命令超时、远端错误。
 - LLM：供应商限流、服务不可用、业务失败；不能把错误文本当成正常回答。
 
-当前后端会话 Hub 在收到 `agent.approval_requested` 后默认拒绝该工具并让 Agent 换方案，没有公开的 REST 审批提交端点。因此前端第一版只能显示该事件和拒绝结果；真正的“允许/拒绝”交互需要后端新增审批 API 后才能实现，不能先做一个无效按钮。
+当前后端已提供公开审批端点 `POST /api/v1/approvals/{run_id}`：Agent 遇到需审批
+的工具调用时通过 SSE 推送 `agent.approval_requested`（含 `run_id` 与 `tool_name`）
+并暂停等待，前端提交 `{"approved":true|false}` 后 Agent 恢复执行或回退 Planning。
+因此前端可以实现真实的「允许 / 拒绝」交互，不再是只能展示的自动拒绝。
+
+审批入口在运行终结后失效（`agent.run_finished` 之后提交会返回 400），
+前端应在收到终态事件时收起审批 UI。
 
 ## 安全和无障碍
 

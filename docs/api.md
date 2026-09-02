@@ -41,6 +41,25 @@ REST Envelope 通常不含 `seq`；SSE Envelope 含按会话递增的 `seq`。
 
 客户端必须同时判断 HTTP 状态和业务响应，不把错误正文显示为正常回答。
 
+**全部错误响应格式一致**（2026-09-02 统一）：业务错误、认证 401、路由 404、
+方法 405 均为 `application/problem+json` + 顶层
+`type` / `title` / `status` / `detail` / 可选 `instance`。
+前端只需实现一个错误解析器，不再有「错误藏在成功 Envelope 的 data 里」的例外。
+
+`type` 取值为稳定字符串标识（不是 URI），当前全集：
+
+`bad_request`、`not_found`、`method_not_allowed`、`unauthorized`、
+`invalid_json`、`invalid_mode`、`invalid_snapshot`、`invalid_feature_config`、
+`missing_fields`、`missing_snapshot`、`not_ready`、`agent_error`、
+`approval_failed`、`compile_error`、`distill_error`、`search_error`、
+`list_error`、`delete_error`、`upsert_error`、`models_error`、
+`rollback_failed`、`snapshot_failed`、`backup_error`、`backup_list_failed`、
+`acquire_failed`、`pair_failed`、`triage_failed`、`start_failed`、
+`discuss_failed`、`conclude_failed`、`staffing_failed`、`upgrade_error`、
+`llm_unavailable`、`memory_unavailable`、`monitor_unavailable`、
+`backup_unavailable`、`upgrade_unavailable`、`sessions_unavailable`、
+`teamwork_unavailable`、`feature_models_unavailable`。
+
 ### 认证
 
 除 `/health`、`/ready` 和 `/device/ws` 外，所有 REST 端点需要 Bearer Token 认证：
@@ -49,7 +68,19 @@ REST Envelope 通常不含 `seq`；SSE Envelope 含按会话递增的 `seq`。
 Authorization: Bearer <token>
 ```
 
-Token 在后端首次启动时自动生成，存储在 `data/auth.token`（权限 0600）。无 Token 或错误 Token 返回 `401`。
+Token 在后端首次启动时自动生成，存储在 `data/auth.token`（权限 0600）。
+
+认证细节（2026-09-02 按 RFC 校准）：
+
+- **scheme 大小写不敏感**：`Bearer` / `bearer` / `BEARER` 均可（RFC 9110 §11.1）。
+- **401 必带挑战头**（RFC 9110 §15.5.2）：
+  - 未携带凭据：`WWW-Authenticate: Bearer realm="minibox"`
+  - 凭据无效：`WWW-Authenticate: Bearer realm="minibox", error="invalid_token"`
+- **401 响应体是 Problem Details**（`type` 为 `unauthorized`），不是自定义结构。
+- Token 比较使用常量时间算法，客户端无法通过响应耗时探测前缀。
+
+**SSE 同样需要认证**：`/api/v1/stream` 不在白名单内，必须携带
+`Authorization: Bearer <token>` 请求头，详见 [`sse.md`](sse.md)。
 
 ## 1. 健康、状态与配置
 
@@ -58,10 +89,10 @@ Token 在后端首次启动时自动生成，存储在 `data/auth.token`（权�
 | GET | `/health` | ❌ 免认证 | 无 | `status`, `uptime`, `degrade` |
 | GET | `/ready` | ❌ 免认证 | 无 | `status`, `checks.database/llm/wizard`；未就绪返回 503 |
 | GET | `/server/status` | ✅ | 无 | `ok`, `uptime` |
-| GET | `/config` | 无 | 脱敏配置摘要 |
-| PATCH | `/config` | 可选 `logging`, `llm.default_model`, `server.port` | 更新后的端口、模型、日志级别 |
-| GET | `/monitor/metrics` | 无 | 系统和进程指标 |
-| GET | `/monitor/history` | 无 | 最近指标数组 |
+| GET | `/config` | ✅ | 无 | 脱敏配置摘要 |
+| PATCH | `/config` | ✅ | 可选 `logging`, `llm.default_model`, `server.port` | 更新后的端口、模型、日志级别 |
+| GET | `/monitor/metrics` | ✅ | 无 | 系统和进程指标 |
+| GET | `/monitor/history` | ✅ | 无 | 最近指标数组（无历史时为 `[]`，不是 `null`） |
 
 注意：配置 PATCH 更新的是运行时允许字段；前端不能假设监听端口能在当前连接中立即切换。
 
@@ -72,13 +103,25 @@ Token 在后端首次启动时自动生成，存储在 `data/auth.token`（权�
 | POST | `/conversations/` | 空体可用 | 新 `Session` |
 | GET | `/conversations/` | 无 | `Session[]` |
 | GET | `/conversations/{id}` | 无 | `Session` |
-| POST | `/conversations/{id}/messages` | `{"message":"..."}` | `{"answer":"..."}` |
+| POST | `/conversations/{id}/messages` | `{"message":"..."}` | `{"answer":"<run_id>"}` |
 | POST | `/conversations/{id}/rewind` | `{"keep":2}` | `{"ok":true}` |
 
 `Session`：`id`, `title`, `created_at`, `updated_at`, `messages`, `mode`。
-`Message`：`role`, `content`, 可选 `run_id`, `at`。
+`Message`：`role`, `content`, 可选 `run_id`, `at`（统一 RFC3339）。
 
-发送消息可能耗时，前端应同时订阅对应 `session_id` 的 SSE 来显示运行状态。
+会话列表按 `updated_at` 倒序返回（最近活跃在前），更新时间相同时按 `id` 排序，
+顺序稳定可复现。
+
+`messages` 的 `at` 一律是 RFC3339；从 `conversation_log` 恢复的历史会话
+也会转换为该格式，前端只需处理一种时间格式。历史会话的
+`created_at` / `updated_at` 取自消息真实入库时间，不会被伪造成「刚刚」。
+
+发送消息为**异步**：立即返回 `run_id`（当前放在 `data.answer` 字段中，
+字段名保留自同步实现），实际结果通过 SSE 推送。前端应同时订阅对应
+`session_id` 的 SSE 来显示运行状态和最终回答。
+
+会话 ID 由客户端决定：`POST /conversations/{id}/messages` 中的 `{id}`
+若不存在会以该 ID 新建会话，消息不会被写入其他会话。
 
 ## 3. 知识库
 
@@ -169,7 +212,40 @@ Android 第一版不应默认暴露“应用升级/数据库回滚”按钮；�
 | POST | `/teamwork/projects/{id}/conclude` | `{"verdict":"..."}` | Project |
 | POST | `/teamwork/staffing` | `task_id`, `reason`, `role_card_id`, `permanent` | `decisions`, `alarm` |
 
-注意：`TaskDependency` 的当前 Go 字段缺少 JSON tag，前端第一阶段不应依赖 `tasks` 的 snake_case 编码，直到后端契约补齐并加测试。
+### teamwork DTO 字段契约（2026-09-02 冻结）
+
+本域全部字段已统一为 lower_snake_case，并有契约测试锁定
+（`internal/domain/teamwork/dto_contract_test.go` +
+`internal/infrastructure/teamwork/dto_contract_test.go`）。
+
+| 结构 | JSON 字段 |
+|---|---|
+| Project | `id`, `question`, `team`, `members`, `discussion`(可省), `verdict`(可省), `status`, `created_at` |
+| Discussion | `question`, `lead_id`, `round`, `max_rounds`, `proposals`, `verdict`(可省), `done`, `started_at` |
+| Proposal | `round`, `member_id`, `content`, `critiques`(可省) |
+| Critique | `member_id`, `content` |
+| Triage | `recommended`, `need_clarify` |
+| TeamRecommendation | `team`, `reason` |
+| DispatchPlan | `groups` |
+| TaskDependency | `id`, `depends_on`(可省) |
+| StaffingRequest | `task_id`, `reason`, `role_card_id`, `permanent` |
+| StaffingDecision | `level`, `approved`, `note`(可省) |
+| CircuitBreaker | `consecutive_failures`, `infinite_loops`, `qa_fail_rounds`, `started_at`, `timeout_ns`, `demoted_members`, `tripped`, `trip_reason`(可省) |
+| Team | `id`, `name`, `description`, `keywords`, `lead_role`, `member_roles` |
+| Member | `id`, `role`, `level`, `profile`, `permanent` |
+| RoleCard | `id`, `name`, `core`, `constraints`, `tools`, `output` |
+| Profile | `member_id` + 7 维评分 + 统计计数 + `updated_at`（详见源码） |
+
+两个需要注意的编码细节：
+
+- `discussion.proposals` 是**以轮次数字字符串为键的对象**，不是数组：
+  `{"proposals":{"1":[{...}],"2":[{...}]}}`。这是 Go 整数键 map 的固定
+  序列化行为，前端按字符串键解析。
+- `circuit_breaker.timeout_ns` 单位是**纳秒整数**（Go `time.Duration`
+  默认编码），展示前需自行换算。
+
+`POST /teamwork/projects` 的 `tasks` 现在可以安全使用
+`[{"id":"t1"},{"id":"t2","depends_on":["t1"]}]` 形式。
 
 ## 10. 路径尾斜杠
 
