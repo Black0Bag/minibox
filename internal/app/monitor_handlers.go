@@ -3,6 +3,7 @@ package app
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/Black0Bag/minibox/internal/monitor"
 )
@@ -28,7 +29,10 @@ func (a *App) handleMonitorHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 // historyRing 内存环形缓冲（最近 N 条指标快照）。
+// 并发约束：Push 由 App.Run 的 30s 采样 goroutine 调用，Snapshot 由 HTTP handler
+// 调用，两者并发访问同一 data 切片，必须加锁（否则为 data race）。
 type historyRing struct {
+	mu    sync.Mutex
 	limit int
 	data  []monitor.Metrics
 }
@@ -43,6 +47,8 @@ func newHistoryRing(limit int) *historyRing {
 
 // Push 追加一条（超出容量淘汰最旧）。
 func (h *historyRing) Push(m monitor.Metrics) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.data = append(h.data, m)
 	if len(h.data) > h.limit {
 		h.data = h.data[len(h.data)-h.limit:]
@@ -50,7 +56,10 @@ func (h *historyRing) Push(m monitor.Metrics) {
 }
 
 // Snapshot 返回当前缓冲副本（旧→新）。
+// 始终返回非 nil 切片：JSON 序列化为 []，避免前端拿到 null 需要额外判空。
 func (h *historyRing) Snapshot() []monitor.Metrics {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	out := make([]monitor.Metrics, len(h.data))
 	copy(out, h.data)
 	return out
