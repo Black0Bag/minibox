@@ -176,7 +176,7 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	}
 
 	// 7. 会话 hub（对话端点）+ SSE 事件流推送
-	a.sessions = newSessionHub(a.agent, a.compiler)
+	a.sessions = newSessionHub(a.agent, a.compiler, logger)
 	a.sessions.SetPublisher(func(sessionID, typ string, data any) {
 		_ = a.sse.Publish(sessionID, "agent", typ, data)
 	})
@@ -185,7 +185,7 @@ func New(_ context.Context, cfg config.Config, logger *slog.Logger) (*App, error
 	if a.db != nil {
 		runStore := storage.NewRunStore(a.db)
 		a.sessions.SetRunStore(runStore)
-		a.sessions.RestoreSessions(logger)
+		a.sessions.RestoreSessions()
 	}
 
 	// 8. 全局时间戳服务（B22：NTP 校准 + 单调序号）

@@ -220,7 +220,7 @@ func TestHandleConfigUpdate_EmptyBody(t *testing.T) {
 func TestSessionSendReturnsRunIDWhenAgentFails(t *testing.T) {
 	provider := &failingProvider{}
 	eng := engine.NewEngine(provider, nil, agent.Config{MaxSteps: 1}, slog.New(slog.DiscardHandler))
-	hub := newSessionHub(eng, nil)
+	hub := newSessionHub(eng, nil, slog.New(slog.DiscardHandler))
 	session := hub.Create()
 
 	runID, err := hub.Send(context.Background(), session.ID, "触发失败")
