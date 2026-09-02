@@ -7,11 +7,9 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,7 +17,7 @@ import (
 
 	"github.com/Black0Bag/minibox/internal/config"
 	"github.com/Black0Bag/minibox/internal/domain/tools"
-	"github.com/Black0Bag/minibox/internal/transport"
+	plerrors "github.com/Black0Bag/minibox/internal/platform/errors"
 )
 
 // Server REST 传输层服务器。
@@ -61,45 +59,15 @@ func (s *Server) buildRouter() chi.Router {
 	// 信封在 handler 层封装（respondEnvelope），不用全局缓冲中间件——
 	// 缓冲会破坏流式/大响应（golang-code-style + SSE 红线：独立路由组）。
 
-	// 认证中间件（若配置了 token）
-	if s.authToken != "" {
-		// 注意：这里需要引用 app 包的 AuthMiddleware，会产生循环依赖。
-		// 解决方案：在 http 包内直接实现认证中间件，或使用函数注入。
-		// 这里我们直接在 http 包内实现一个简单的认证中间件。
-		r.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// 白名单：健康检查和 WS 升级不需要 Bearer Token 认证
-				// （WS 有自己的凭据校验机制：connect.auth + CredentialCheck）
-				if r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/ready" ||
-					r.URL.Path == "/device/ws" {
-					next.ServeHTTP(w, r)
-					return
-				}
-
-				// 获取 Authorization 头
-				authHeader := r.Header.Get("Authorization")
-				if authHeader == "" {
-					http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
-					return
-				}
-
-				// 必须是 Bearer 格式
-				if !strings.HasPrefix(authHeader, "Bearer ") {
-					http.Error(w, `{"error":"invalid authorization format, expected Bearer token"}`, http.StatusUnauthorized)
-					return
-				}
-
-				// 提取并校验 token
-				token := strings.TrimPrefix(authHeader, "Bearer ")
-				if token == "" || token != s.authToken {
-					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
-					return
-				}
-
-				next.ServeHTTP(w, r)
-			})
-		})
-	}
+	// 认证中间件（Bearer Token）。
+	// 白名单：健康检查（探针无凭据）与 WS 升级（/device/ws 有独立的
+	// connect.auth + CredentialCheck 凭据机制）。
+	// 实现在本包 auth.go，是全仓唯一的 REST 认证入口。
+	r.Use(AuthMiddleware(s.authToken,
+		"/api/v1/health",
+		"/api/v1/ready",
+		"/device/ws",
+	))
 
 	// 404/405 处理（统一信封 RFC 7807 错误）
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -154,23 +122,23 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpSrv.Shutdown(ctx)
 }
 
-// respondJSON 写统一信封 JSON 响应。
-func respondJSON(w http.ResponseWriter, status int, env *transport.Envelope) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(env)
-}
-
-// respondError 写 RFC 7807 错误信封（REST 错误路径专用）。
+// respondError 写 RFC 9457（原 7807）Problem Details 错误响应。
+//
+// 路由级错误（404/405）与业务 handler 的 app.respondErr、认证中间件的 401
+// 使用同一格式：Content-Type: application/problem+json + 顶层
+// type/title/status/detail/instance。前端只需一个错误解析器。
+//
+// 注意：错误响应不包装成功信封（Envelope）——把错误藏在 Envelope.data 里会让
+// 客户端无法用统一路径判定失败（api.md「通用响应/错误」契约）。
+// 成功信封由 app 包的 respondOK/respondJSON 负责；本包只处理路由级错误。
 func respondError(w http.ResponseWriter, status int, typ, title, detail, instance string) {
-	env, _ := transport.NewEnvelope("system", instance, "api.error", map[string]any{
-		"type":     typ,
-		"title":    title,
-		"detail":   detail,
-		"status":   status,
-		"instance": instance,
+	plerrors.Write(w, plerrors.ProblemDetail{
+		Type:     typ,
+		Title:    title,
+		Status:   status,
+		Detail:   detail,
+		Instance: instance,
 	})
-	respondJSON(w, status, env)
 }
 
 // 下方为各端点处理器（已迁移至 app/http_handlers.go，此处保留空）
