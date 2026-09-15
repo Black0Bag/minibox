@@ -36,12 +36,14 @@ archives:
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files:
       - README.md
+      - CHANGELOG.md
 
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
 changelog:
+  use: file
   sort: asc
   groups:
     - title: 新功能

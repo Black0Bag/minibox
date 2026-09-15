@@ -24,6 +24,9 @@ jobs:
       - name: 下载依赖
         run: go mod download
 
+      - name: 版本一致性校验
+        run: bash scripts/check_version.sh
+
       - name: 格式检查（gofmt）
         run: |
           # gofmt 不合规直接失败，避免格式漂移污染 diff

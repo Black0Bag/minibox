@@ -19,6 +19,9 @@ jobs:
         with:
           fetch-depth: 0 # GoReleaser 需要完整 git 历史生成 changelog
 
+      - name: 版本一致性校验
+        run: bash scripts/check_version.sh
+
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:

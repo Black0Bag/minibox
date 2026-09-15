@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/Black0Bag/minibox/internal/app"
@@ -17,11 +18,22 @@ import (
 )
 
 // 版本信息（GoReleaser ldflags 注入：-X main.version=...）。
+// 本地构建时从 VERSION 文件读取；CI 发布时由 ldflags 覆盖。
 var (
-	version = "dev"
+	version = readVersionFile()
 	commit  = "none"
 	date    = "unknown"
 )
+
+// readVersionFile 在本地构建（无 ldflags 注入）时从 VERSION 文件读取版本号。
+// GoReleaser 发布时会通过 -X main.version=... 覆盖此值。
+func readVersionFile() string {
+	data, err := os.ReadFile("VERSION")
+	if err != nil {
+		return "dev"
+	}
+	return strings.TrimSpace(string(data))
+}
 
 func main() {
 	if err := run(); err != nil {

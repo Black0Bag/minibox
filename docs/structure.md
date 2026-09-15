@@ -2,8 +2,11 @@
 
 ## 目录结构
 
-- `cmd/minibox/`：薄入口、配置、信号和生命周期。
+- `cmd/minibox/`：薄入口、配置、信号和生命周期；版本信息注入。
 - `internal/app/`：组合根、REST handler、会话和设备装配。
+- `scripts/`：版本校验等维护脚本。
+- `VERSION`：唯一版本源文件。
+- `CHANGELOG.md`：版本变更记录。
 - `internal/domain/`：Agent、LLM、memory、permission、scheduler、teamwork、tools 等接口和类型。
 - `internal/infrastructure/`：SQLite/FTS5/向量、LLM、编译/蒸馏、工具、调度、备份和升级。
 - `internal/transport/`：HTTP、SSE、WebSocket 和统一 Envelope。
