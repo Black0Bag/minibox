@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-16
+
+### Fixed
+- 修复 GoReleaser 跨平台编译失败：移除 windows 目标（syscall.Statfs 不支持 Windows）
+
 ## [0.1.0] - 2026-09-16
 
 ### Added
