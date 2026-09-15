@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-16
+
+### Fixed
+- 修复 GoReleaser 配置错误：changelog.use: file 不是有效选项，移除后使用默认 git 模式
+
 ## [0.1.1] - 2026-09-16
 
 ### Fixed

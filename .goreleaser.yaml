@@ -1,5 +1,5 @@
 # GoReleaser 配置（模块 42：跨平台单文件二进制发布）。
-# 单文件二进制红线（PRD 1）：CGO_ENABLED=0 + trimpath，linux/darwin/windows × amd64/arm64。
+# 单文件二进制红线（PRD 1）：CGO_ENABLED=0 + trimpath，linux/darwin × amd64/arm64。
 # 用法：git tag v0.1.0 && git push origin v0.1.0（触发 release workflow）
 version: 2
 
@@ -39,7 +39,6 @@ checksum:
   algorithm: sha256
 
 changelog:
-  use: file
   sort: asc
   groups:
     - title: 新功能
