@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-16
+
+### Changed
+- 拆分 http_handlers.go（1030 行）为 9 个域文件，提升可维护性
+
+### Fixed
+- 修复 GoReleaser 跨平台编译失败（v0.1.0-v0.1.2）
+
 ## [0.1.2] - 2026-09-16
 
 ### Fixed

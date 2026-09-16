@@ -4,6 +4,18 @@
 
 - `cmd/minibox/`：薄入口、配置、信号和生命周期；版本信息注入。
 - `internal/app/`：组合根、REST handler、会话和设备装配。
+  - `http_handlers.go`：路由挂载与公共响应工具。
+  - `conversation_handlers.go`：对话域 handler。
+  - `kb_handlers.go`：知识库域 handler。
+  - `llm_handlers.go`：LLM 域 handler。
+  - `schedule_handlers.go`：调度域 handler。
+  - `config_handlers.go`：配置域 handler。
+  - `health_handlers.go`：健康检查域 handler。
+  - `tools_handlers.go`：工具与权限域 handler。
+  - `backup_handlers.go`：备份域 handler。
+  - `upgrade_handlers.go`：自升级域 handler。
+  - `teamwork_handlers.go`：团队协作域 handler。
+  - `monitor_handlers.go`：性能监控域 handler。
 - `scripts/`：版本校验等维护脚本。
 - `VERSION`：唯一版本源文件。
 - `CHANGELOG.md`：版本变更记录。
