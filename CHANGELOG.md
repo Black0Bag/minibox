@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-16
+
+### Added
+- 补齐 4 个 domain 包单元测试（agent/memory/scheduler/subagent，共 36 个测试用例）
+
 ## [0.2.0] - 2026-09-16
 
 ### Changed
