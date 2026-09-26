@@ -1,12 +1,12 @@
 # minibox 后端 CI 流水线
-# 触发：push 到 opencode 分支 + PR
+# 触发：push 到 main 分支 + PR
 name: CI
 
 on:
   push:
-    branches: [opencode]
+    branches: [main]
   pull_request:
-    branches: [opencode]
+    branches: [main]
 
 jobs:
   test:
