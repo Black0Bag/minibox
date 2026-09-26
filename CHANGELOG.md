@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 修复空知识库 `GET /kb/store` 与无命中 `POST /kb/search` 返回 `null` 数组的问题：
+  Go 空结果 nil slice 序列化成 `null`，违反 api.md §3 的 `entries[]`/`hits[]` 契约，
+  严格 JSON 解码的客户端（Android）在打开知识库时直接崩溃；现恒返回 `[]`
+  （回归测试：`internal/app/kb_handlers_test.go`）
+
 ## [0.2.1] - 2026-09-16
 
 ### Added

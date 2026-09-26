@@ -49,6 +49,10 @@ func (a *App) handleKBSearch(w http.ResponseWriter, r *http.Request) {
 		a.respondErr(w, r, http.StatusInternalServerError, "search_error", err.Error())
 		return
 	}
+	if hits == nil {
+		// 契约不变量（api.md §3）：data.hits 恒为数组，nil slice 序列化成 null 会让严格解码的客户端崩溃。
+		hits = []memory.Hit{}
+	}
 	a.respondOK(w, r, "api.kb.search", map[string]any{"hits": hits})
 }
 
@@ -67,6 +71,11 @@ func (a *App) handleKBList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.respondErr(w, r, http.StatusInternalServerError, "list_error", err.Error())
 		return
+	}
+	if entries == nil {
+		// 契约不变量（api.md §3）：data.entries 恒为数组。
+		// Go 空结果的 nil slice 会序列化成 null，严格 JSON 客户端解码必崩（f4-integration 联调缺陷）。
+		entries = []memory.Entry{}
 	}
 	a.respondOK(w, r, "api.kb.store.list", map[string]any{"entries": entries})
 }
